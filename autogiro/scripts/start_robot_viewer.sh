@@ -34,14 +34,6 @@ source "${ROS2_INSTALL_PATH}/setup.bash"
 # Source local workspace setup
 source "install/setup.bash"
 
-# --- Debug Prints ---
-echo "--- Environment Debug Info before launch ---"
-echo "PATH: $PATH"
-echo "QT_QPA_PLATFORM_PLUGIN_PATH: $QT_QPA_PLATFORM_PLUGIN_PATH"
-echo "QT_PLUGIN_PATH: $QT_PLUGIN_PATH"
-echo "ROS_PACKAGE_PATH: $ROS_PACKAGE_PATH"
-echo "--- End Environment Debug Info ---"
-
 # --- Launch Robot State Publisher (RSP) ---
 echo "Launching Robot State Publisher (${RSP_LAUNCH_FILE})..."
 ros2 launch autogiro "${RSP_LAUNCH_FILE}" & # Run in background

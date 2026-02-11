@@ -30,16 +30,16 @@ def generate_launch_description():
         output='screen',
         parameters=[params]
     )
-    
+
 
     # Create a joint_state_publisher_gui node
-    node_joint_state_publisher = Node(
-        package='joint_state_publisher_gui',
-        executable='joint_state_publisher_gui',
-        name='joint_state_publisher_gui',
-        output='screen',
-        parameters=[{'use_sim_time': use_sim_time}]
-    )
+    # node_joint_state_publisher = Node(
+    #     package='joint_state_publisher_gui',
+    #     executable='joint_state_publisher_gui',
+    #     name='joint_state_publisher_gui',
+    #     output='screen',
+    #     parameters=[{'use_sim_time': use_sim_time}]
+    # )
 
 
     # Launch!
@@ -54,6 +54,6 @@ def generate_launch_description():
             description='Use ros2_control if true'),
 
         node_robot_state_publisher,
-        node_joint_state_publisher
+        #node_joint_state_publisher
     ])
 
