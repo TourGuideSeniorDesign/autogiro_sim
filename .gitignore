@@ -1,0 +1,11 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# ROS 2 build artifacts that might sneak in
+build/
+install/
+log/
+
+# macOS system files
+.DS_Store
