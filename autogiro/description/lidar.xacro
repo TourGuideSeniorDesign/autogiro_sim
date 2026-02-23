@@ -4,29 +4,29 @@
     <joint name="laser_joint" type="fixed">
         <parent link="chassis"/>
         <child link="laser_frame"/>
-        <origin xyz="0.122 0 0.212" rpy="0 0 0"/>
+        <origin xyz="0.1 0 1.8 " rpy="0 0 0"/> <!-- 1.8m is the height of the lidar from the ground -->
     </joint>
 
     <link name="laser_frame">
         <visual>
             <geometry>
-                <cylinder radius="0.05" length="0.04"/>
+                <cylinder radius="0.0325" length="0.06"/>
             </geometry>
             <material name="black"/>
         </visual>
         <visual>
             <origin xyz="0 0 -0.05"/>
             <geometry>
-                <cylinder radius="0.01" length="0.1"/>
+                <cylinder radius="0.0325" length="0.06"/>
             </geometry>
             <material name="black"/>
         </visual>
         <collision>
             <geometry>
-                <cylinder radius="0.05" length="0.04"/>
+                <cylinder radius="0.0325" length="0.06"/>
             </geometry>
         </collision>
-        <xacro:inertial_cylinder mass="0.1" length="0.04" radius="0.05">
+        <xacro:inertial_cylinder mass="0.1" length="0.06" radius="0.0325">
             <origin xyz="0 0 0" rpy="0 0 0"/>
         </xacro:inertial_cylinder>
     </link>
@@ -36,30 +36,30 @@
     <gazebo reference="laser_frame">
         <material>Gazebo/Black</material>
 
-        <sensor name="laser" type="ray">
+        <sensor name="laser" type="gpu_lidar">
             <pose> 0 0 0 0 0 0 </pose>
             <visualize>false</visualize>
-            <update_rate>10</update_rate>
-            <ray>
+            <update_rate>10</update_rate> <!-- 10 Hz -->
+            <gpu_lidar>
                 <scan>
                     <horizontal>
                         <samples>360</samples>
-                        <min_angle>-3.14</min_angle>
-                        <max_angle>3.14</max_angle>
+                        <min_angle>-0.0976</min_angle> <!-- -52 degrees -->
+                        <max_angle>0.1222</max_angle> <!-- 7 degrees -->
                     </horizontal>
                 </scan>
                 <range>
-                    <min>0.3</min>
-                    <max>12</max>
+                    <min>0.1</min>
+                    <max>20</max>
                 </range>
-            </ray>
-            <plugin name="laser_controller" filename="libgazebo_ros_ray_sensor.so">
+            </gpu_lidar>
+            <!-- <plugin name="laser_controller" filename="libgazebo_ros_gpu_laser.so">
                 <ros>
                     <argument>~/out:=scan</argument>
                 </ros>
                 <output_type>sensor_msgs/LaserScan</output_type>
                 <frame_name>laser_frame</frame_name>
-            </plugin>
+            </plugin> -->
         </sensor>
     </gazebo>
 
