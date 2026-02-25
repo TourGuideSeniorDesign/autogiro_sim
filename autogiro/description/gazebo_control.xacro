@@ -1,6 +1,9 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
+
+<!-- Use this file for ideal motor simulation, bypasses motor physics and simply moves the wheels based on geometry and basic friction
+    Kinematic simulation. Use ros2_control.xacro for realistic motor simulation.-->
     <gazebo>
         <plugin name="diff_drive" filename="libgazebo_ros_diff_drive.so">
 

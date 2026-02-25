@@ -1,6 +1,9 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
+<!-- Use this file for realistic motor simulation,ros2 framework is set up here acting as the nervous system.
+     Ros2 here will talk to the gazebo physics engine. -->
+
     <xacro:unless value="$(arg sim_mode)">
         <ros2_control name="RealRobot" type="system">
             <hardware>
@@ -32,6 +35,7 @@
         </ros2_control>
     </xacro:unless>
 
+    <!-- here nodes for realistic sim -->
     <xacro:if value="$(arg sim_mode)">
         <ros2_control name="GazeboSystem" type="system">
             <hardware>
@@ -39,16 +43,16 @@
             </hardware>
             <joint name="left_wheel_joint">
                 <command_interface name="velocity">
-                    <param name="min">-10</param>
-                    <param name="max">10</param>
+                    <param name="min">-14.66</param> <!--rad/s-->
+                    <param name="max">14.66</param> <!--rad/s-->
                 </command_interface>
                 <state_interface name="velocity"/>
                 <state_interface name="position"/>
             </joint>
             <joint name="right_wheel_joint">
                 <command_interface name="velocity">
-                    <param name="min">-10</param>
-                    <param name="max">10</param>
+                    <param name="min">-14.66</param> <!--rad/s-->
+                    <param name="max">14.66</param> <!--rad/s-->
                 </command_interface>
                 <state_interface name="velocity"/>
                 <state_interface name="position"/>
