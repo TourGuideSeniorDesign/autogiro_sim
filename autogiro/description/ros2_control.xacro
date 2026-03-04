@@ -61,7 +61,8 @@
     </xacro:if>
 
     <gazebo>
-        <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.dylib"> <!-- changed from .so to .dylib -->
+        <!-- <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.dylib"> changed from .so to .dylib -->
+            <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.so"> <!-- Reverted to play around with loading logic-->
             <parameters>$(find autogiro)/config/my_controllers.yaml</parameters>
             <parameters>$(find autogiro)/config/gaz_ros2_ctl_use_sim.yaml</parameters>
         </plugin>

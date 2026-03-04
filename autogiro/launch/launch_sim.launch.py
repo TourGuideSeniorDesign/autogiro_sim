@@ -4,8 +4,9 @@ from ament_index_python.packages import get_package_share_directory
 
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, RegisterEventHandler, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.event_handlers import OnProcessExit
 
 from launch_ros.actions import Node
 
@@ -17,7 +18,7 @@ def generate_launch_description():
     # Include the robot_state_publisher launch file, provided by our own package. Force sim time to be enabled
     # !!! MAKE SURE YOU SET THE PACKAGE NAME CORRECTLY !!!
 
-    package_name='autogiro' #<--- CHANGE ME
+    package_name='autogiro' 
 
     rsp = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([os.path.join(
@@ -57,42 +58,42 @@ def generate_launch_description():
 
     diff_drive_spawner = Node(
         package="controller_manager",
-        executable="spawner", #changed from spawner.py to spawner
+        executable="spawner",
         arguments=["diff_cont"],
     )
 
     joint_broad_spawner = Node(
         package="controller_manager",
-        executable="spawner", #changed from spawner.py to spawner
+        executable="spawner",
         arguments=["joint_broad"],
     )
 
 
-    # Code for delaying a node (I haven't tested how effective it is)
-    # 
-    # First add the below lines to imports
-    # from launch.actions import RegisterEventHandler
-    # from launch.event_handlers import OnProcessExit
-    #
-    # Then add the following below the current diff_drive_spawner
-    # delayed_diff_drive_spawner = RegisterEventHandler(
-    #     event_handler=OnProcessExit(
-    #         target_action=spawn_entity,
-    #         on_exit=[diff_drive_spawner],
-    #     )
-    # )
-    #
-    # Replace the diff_drive_spawner in the final return with delayed_diff_drive_spawner
+    # Delay the spawners until spawn_entity has finished to ensure Gazebo is ready
+    delayed_diff_drive_spawner = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=spawn_entity,
+            on_exit=[diff_drive_spawner],
+        )
+    )
 
+    delayed_joint_broad_spawner = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=spawn_entity,
+            on_exit=[joint_broad_spawner],
+        )
+    )
 
 
     # Launch them all!
     return LaunchDescription([
+        SetEnvironmentVariable('LC_ALL', 'en_US.UTF-8'),
+        SetEnvironmentVariable('LANG', 'en_US.UTF-8'),
         rsp,
         joystick,
         twist_mux,
         gazebo,
         spawn_entity,
-        diff_drive_spawner,
-        joint_broad_spawner
+        delayed_diff_drive_spawner,
+        delayed_joint_broad_spawner
     ])
