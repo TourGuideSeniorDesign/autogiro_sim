@@ -4,7 +4,7 @@
     <joint name="laser_joint" type="fixed">
         <parent link="chassis"/>
         <child link="laser_frame"/>
-        <origin xyz="0.1 0 1.8 " rpy="0 0 0"/> <!-- 1.8m is the height of the lidar from the ground -->
+        <origin xyz="0.1 0 1.8 " rpy="${pi} 0 0"/> <!-- 1.8m is the height of the lidar from the ground -->
     </joint>
 
     <link name="laser_frame">
@@ -38,22 +38,28 @@
 
         <sensor name="laser" type="gpu_lidar">
             <pose> 0 0 0 0 0 0 </pose>
-            <visualize>false</visualize>
-            <update_rate>10</update_rate> <!-- 10 Hz -->
+            <visualize>true</visualize>
+            <update_rate>10</update_rate> <topic>scan</topic> <!-- 10 Hz -->
+            <gz_frame_id>laser_frame</gz_frame_id>
             <gpu_lidar>
                 <scan>
                     <horizontal>
-                        <samples>360</samples>
-                        <min_angle>-0.0976</min_angle> <!-- -52 degrees -->
-                        <max_angle>0.1222</max_angle> <!-- 7 degrees -->
+                    	<samples>360</samples>
+                        <resolution>1</resolution>
+                        <min_angle>-3.14159</min_angle>
+                        <max_angle>3.14159</max_angle>
                     </horizontal>
+                    <vertical>
+                        <samples>16</samples> <resolution>1</resolution>
+                        <min_angle>-0.9076</min_angle> <max_angle>0.1222</max_angle>  
+                    </vertical>
                 </scan>
                 <range>
                     <min>0.1</min>
                     <max>20</max>
                 </range>
             </gpu_lidar>
-            <!-- <plugin name="laser_controller" filename="libgazebo_ros_gpu_laser.so">
+            <!-- <plugin name="laser_controller" filename="libgazebo_ros_gpu_laser.so"> 
                 <ros>
                     <argument>~/out:=scan</argument>
                 </ros>
