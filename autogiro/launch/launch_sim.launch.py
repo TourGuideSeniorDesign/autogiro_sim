@@ -44,13 +44,16 @@ def generate_launch_description():
     gazebo = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([os.path.join(
                     get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')]),
-                    launch_arguments={'extra_gazebo_args': '--ros-args --params-file ' + gazebo_params_file}.items()
+                    #launch_arguments={'extra_gazebo_args': '--ros-args --params-file ' + gazebo_params_file}.items()
+                    launch_arguments={'gz_args': '-r empty.sdf'}.items()
              )
 
     # Run the spawner node from the ros_gz_sim package. The entity name doesn't really matter if you only have a single robot.
     spawn_entity = Node(package='ros_gz_sim', executable='create',
                         arguments=['-topic', 'robot_description',
-                                   '-name', 'autogiro'],
+                                   '-name', 'autogiro', 
+                                   '-z', '0.5'
+                                   ],
                         output='screen')
 
 
@@ -64,6 +67,13 @@ def generate_launch_description():
         package="controller_manager",
         executable="spawner",
         arguments=["joint_broad"],
+    )
+    
+    clock_bridge = Node(
+    	package='ros_gz_bridge',
+   	 executable='parameter_bridge',
+    	arguments=['/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock'],
+    	output='screen'
     )
 
 
@@ -93,5 +103,6 @@ def generate_launch_description():
         gazebo,
         spawn_entity,
         delayed_diff_drive_spawner,
-        delayed_joint_broad_spawner
+        delayed_joint_broad_spawner, 
+        clock_bridge
     ])
