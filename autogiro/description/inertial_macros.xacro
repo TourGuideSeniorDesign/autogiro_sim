@@ -32,7 +32,7 @@
             <mass value="${mass}" />
             <inertia ixx="${(1/12) * mass * (3*radius*radius + length*length)}" ixy="0.0" ixz="0.0"
                     iyy="${(1/12) * mass * (3*radius*radius + length*length)}" iyz="0.0"
-                    izz="0.135" /> <!-- changed from formula to 0.135 to match motor inertia, reference articubot for old-->
+                    izz="${(mass/2.0) * (radius*radius)}" />  articubot for old-->
         </inertial>
     </xacro:macro>
 

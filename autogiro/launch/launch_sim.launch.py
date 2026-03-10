@@ -15,10 +15,8 @@ from launch_ros.actions import Node
 def generate_launch_description():
 
 
-    # Include the robot_state_publisher launch file, provided by our own package. Force sim time to be enabled
-    # !!! MAKE SURE YOU SET THE PACKAGE NAME CORRECTLY !!!
 
-    package_name='autogiro' 
+    package_name='autogiro'
 
     rsp = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([os.path.join(
@@ -42,17 +40,20 @@ def generate_launch_description():
 
     gazebo_params_file = os.path.join(get_package_share_directory(package_name),'config','gazebo_params.yaml')
 
-    # Include the Gazebo launch file, provided by the gazebo_ros package
+    # Include the Gazebo launch file, provided by the ros_gz_sim package
     gazebo = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([os.path.join(
-                    get_package_share_directory('gazebo_ros'), 'launch', 'gazebo.launch.py')]),
-                    launch_arguments={'extra_gazebo_args': '--ros-args --params-file ' + gazebo_params_file}.items()
+                    get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')]),
+                    #launch_arguments={'extra_gazebo_args': '--ros-args --params-file ' + gazebo_params_file}.items()
+                    launch_arguments={'gz_args': '-r empty.sdf'}.items()
              )
 
-    # Run the spawner node from the gazebo_ros package. The entity name doesn't really matter if you only have a single robot.
-    spawn_entity = Node(package='gazebo_ros', executable='spawn_entity.py',
+    # Run the spawner node from the ros_gz_sim package. The entity name doesn't really matter if you only have a single robot.
+    spawn_entity = Node(package='ros_gz_sim', executable='create',
                         arguments=['-topic', 'robot_description',
-                                   '-entity', 'my_bot'],
+                                   '-name', 'autogiro', 
+                                   '-z', '0.5'
+                                   ],
                         output='screen')
 
 
@@ -66,6 +67,14 @@ def generate_launch_description():
         package="controller_manager",
         executable="spawner",
         arguments=["joint_broad"],
+    )
+    
+    clock_bridge = Node(
+    	package='ros_gz_bridge',
+   	 executable='parameter_bridge',
+    	arguments=['/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock', 
+    		   '/scan@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked'],
+    	output='screen'
     )
 
 
@@ -85,7 +94,7 @@ def generate_launch_description():
     )
 
 
-    # Launch them all!
+    # Launch them all
     return LaunchDescription([
         SetEnvironmentVariable('LC_ALL', 'en_US.UTF-8'),
         SetEnvironmentVariable('LANG', 'en_US.UTF-8'),
@@ -95,5 +104,6 @@ def generate_launch_description():
         gazebo,
         spawn_entity,
         delayed_diff_drive_spawner,
-        delayed_joint_broad_spawner
+        delayed_joint_broad_spawner, 
+        clock_bridge
     ])

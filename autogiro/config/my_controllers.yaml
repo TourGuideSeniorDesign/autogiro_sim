@@ -1,6 +1,6 @@
 controller_manager:
   ros__parameters:
-    update_rate: 50. #NEED TO MATCH THIS TO IRL CONTROL LOOP RATE , 50 good for now
+    update_rate: 50 #NEED TO MATCH THIS TO IRL CONTROL LOOP RATE , 50 good for now
     use_sim_time: true
 
     diff_cont:

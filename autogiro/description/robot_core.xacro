@@ -9,7 +9,7 @@
     <xacro:property name="chassis_height" value="1.75"/>
     <xacro:property name="chassis_mass" value="68.039"/>
     <xacro:property name="wheel_radius" value=".161"/>
-    <xacro:property name="wheel_thickness" value="0.055"/>
+    <xacro:property name="wheel_thickness" value="0.055"/> <!-- Changed to fix error code 18 from phys engine (was 0.055) -->
     <xacro:property name="wheel_mass" value=".725"/>
     <xacro:property name="wheel_offset_x" value="0.0"/>
     <xacro:property name="wheel_offset_y" value="0.33"/>
@@ -44,7 +44,6 @@
     <!-- BASE LINK -->
 
     <link name="base_link">
-
     </link>
 
     <!-- BASE_FOOTPRINT LINK -->
