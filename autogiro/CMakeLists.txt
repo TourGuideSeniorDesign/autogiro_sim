@@ -70,7 +70,7 @@ endif()
 
 # This is the most important part for your URDF and Launch files
 install(
-  DIRECTORY config description launch worlds
+  DIRECTORY config description launch worlds models
   DESTINATION share/${PROJECT_NAME}
 )
 
