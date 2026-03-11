@@ -14,6 +14,10 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
 
+
+    pkg_autogiro = get_package_share_directory('autogiro')
+    # Build path to the specific world file
+    world_file = os.path.join(pkg_autogiro, 'worlds', 'acopian_world.world')
     
     package_name='autogiro'
 
@@ -44,7 +48,7 @@ def generate_launch_description():
                 PythonLaunchDescriptionSource([os.path.join(
                     get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')]),
                     #launch_arguments={'extra_gazebo_args': '--ros-args --params-file ' + gazebo_params_file}.items()
-                    launch_arguments={'gz_args': '-r empty.sdf'}.items()
+                    launch_arguments={'gz_args': f'-r {world_file}'}.items()
              )
 
     # Run the spawner node from the ros_gz_sim package. The entity name doesn't really matter if you only have a single robot.
