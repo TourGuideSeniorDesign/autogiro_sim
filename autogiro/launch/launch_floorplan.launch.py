@@ -55,7 +55,9 @@ def generate_launch_description():
     spawn_entity = Node(package='ros_gz_sim', executable='create',
                         arguments=['-topic', 'robot_description',
                                    '-name', 'autogiro', 
-                                   '-z', '0.5'
+                                   '-x', '13.05',
+                                   '-y', '10.71',
+                                   '-z', '0.5' # Changed spawn position to be by stairs, also increased ground_plane dimensions to 150x150 
                                    ],
                         output='screen')
 
