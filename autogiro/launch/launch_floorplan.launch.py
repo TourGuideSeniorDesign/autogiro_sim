@@ -2,7 +2,6 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 
-
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, RegisterEventHandler, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -11,9 +10,7 @@ from launch.event_handlers import OnProcessExit
 from launch_ros.actions import Node
 
 
-
 def generate_launch_description():
-
 
     pkg_autogiro = get_package_share_directory('autogiro')
     # Build path to the specific world file
@@ -47,20 +44,18 @@ def generate_launch_description():
     gazebo = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([os.path.join(
                     get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')]),
-                    #launch_arguments={'extra_gazebo_args': '--ros-args --params-file ' + gazebo_params_file}.items()
                     launch_arguments={'gz_args': f'-r {world_file}'}.items()
              )
 
-    # Run the spawner node from the ros_gz_sim package. The entity name doesn't really matter if you only have a single robot.
+    # Run the spawner node from the ros_gz_sim package
     spawn_entity = Node(package='ros_gz_sim', executable='create',
                         arguments=['-topic', 'robot_description',
                                    '-name', 'autogiro', 
                                    '-x', '13.05',
                                    '-y', '10.71',
-                                   '-z', '0.5' # Changed spawn position to be by stairs, also increased ground_plane dimensions to 150x150 
+                                   '-z', '0.5' 
                                    ],
                         output='screen')
-
 
     diff_drive_spawner = Node(
         package="controller_manager",
@@ -74,14 +69,40 @@ def generate_launch_description():
         arguments=["joint_broad"],
     )
     
+    # MODIFIED: Changed /scan to /points
     clock_bridge = Node(
-    	package='ros_gz_bridge',
-   	 executable='parameter_bridge',
-    	arguments=['/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock', 
-    		   '/scan@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked'],
-    	output='screen'
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=[
+            '/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock', 
+            '/points@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked'
+        ],
+        output='screen'
     )
 
+    # ADDED: PointCloud to LaserScan converter
+    pctols_node = Node(
+        package='pointcloud_to_laserscan',
+        executable='pointcloud_to_laserscan_node',
+        name='pointcloud_to_laserscan',
+        remappings=[
+            ('cloud_in', '/points'),
+            ('scan', '/scan')
+        ],
+        parameters=[{
+            'target_frame': 'laser_frame',
+            'transform_tolerance': 0.01,
+            'min_height': 0.1,  
+            'max_height': 1.0,  
+            'angle_min': -3.14159,
+            'angle_max': 3.14159,
+            'angle_increment': 0.0087,
+            'scan_time': 0.1,
+            'range_min': 0.2,
+            'range_max': 20.0,
+            'use_inf': True,
+        }]
+    )
 
     # Delay the spawners until spawn_entity has finished to ensure Gazebo is ready
     delayed_diff_drive_spawner = RegisterEventHandler(
@@ -98,7 +119,6 @@ def generate_launch_description():
         )
     )
 
-
     # Launch them all
     return LaunchDescription([
         SetEnvironmentVariable('LC_ALL', 'en_US.UTF-8'),
@@ -110,5 +130,6 @@ def generate_launch_description():
         spawn_entity,
         delayed_diff_drive_spawner,
         delayed_joint_broad_spawner, 
-        clock_bridge
+        clock_bridge,
+        pctols_node # ADDED: Make sure to return the new node
     ])

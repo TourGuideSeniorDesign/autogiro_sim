@@ -39,33 +39,29 @@
         <sensor name="laser" type="gpu_lidar">
             <pose> 0 0 0 0 0 0 </pose>
             <visualize>true</visualize>
-            <update_rate>10</update_rate> <topic>scan</topic> <!-- 10 Hz -->
+            <update_rate>10</update_rate> 
+            <topic>points</topic>  <!-- Changed from /scan  -->
             <gz_frame_id>laser_frame</gz_frame_id>
-            <gpu_lidar>
+            <lidar>
                 <scan>
                     <horizontal>
-                    	<samples>360</samples>
+                        <samples>360</samples>
                         <resolution>1</resolution>
                         <min_angle>-3.14159</min_angle>
                         <max_angle>3.14159</max_angle>
                     </horizontal>
                     <vertical>
-                        <samples>16</samples> <resolution>1</resolution>
-                        <min_angle>-0.9076</min_angle> <max_angle>0.1222</max_angle>  
+                        <samples>16</samples> 
+                        <resolution>1</resolution>
+                        <min_angle>-0.9076</min_angle> 
+                        <max_angle>0.1222</max_angle>  
                     </vertical>
                 </scan>
                 <range>
                     <min>0.1</min>
                     <max>20</max>
                 </range>
-            </gpu_lidar>
-            <!-- <plugin name="laser_controller" filename="libgazebo_ros_gpu_laser.so"> 
-                <ros>
-                    <argument>~/out:=scan</argument>
-                </ros>
-                <output_type>sensor_msgs/LaserScan</output_type>
-                <frame_name>laser_frame</frame_name>
-            </plugin> -->
+            </lidar>
         </sensor>
     </gazebo>
 
