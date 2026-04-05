@@ -58,37 +58,95 @@
     </link>
 
 
-    <!-- CHASSIS LINK -->
+    <!-- CHASSIS BASE LINK -->
 
-    <joint name="chassis_joint" type="fixed">
+    <joint name="chassis_base_joint" type="fixed">
         <parent link="base_link"/>
-        <child link="chassis"/>
+        <child link="chassis_base"/>
         <origin xyz="${-wheel_offset_x} 0 ${-wheel_offset_z}"/>
     </joint>
 
-    <link name="chassis">
+    <link name="chassis_base">
         <visual>
-            <origin xyz="${chassis_length/2} 0 ${chassis_height/2}"/>
+            <origin xyz="${chassis_length/2} 0 ${chassis_height/2 - 0.3}"/>
             <geometry>
-                <box size="${chassis_length} ${chassis_width} ${chassis_height}"/>
+                <box size="${chassis_length} ${chassis_width} ${chassis_height-0.7}"/>
             </geometry>
             <material name="orange"/>
         </visual>
         <collision>
-            <origin xyz="${chassis_length/2} 0 ${chassis_height/2}"/>
+            <origin xyz="${chassis_length/2} 0 0.535"/>
             <geometry>
-                <box size="${chassis_length} ${chassis_width} ${chassis_height}"/>
+                <box size="${chassis_length} ${chassis_width} ${chassis_height-0.7}"/>
             </geometry>
         </collision>
         <xacro:inertial_box mass="${chassis_mass}" x="${chassis_length}" y="${chassis_width}" z="${chassis_height}">
-            <origin xyz="${chassis_length/2} 0 ${chassis_height/2}" rpy="0 0 0"/>
+            <origin xyz="${chassis_length/2} 0 0.535" rpy="0 0 0"/>
         </xacro:inertial_box>
     </link>
 
-    <gazebo reference="chassis">
+    <gazebo reference="chassis_base">
         <material>Gazebo/Orange</material>
     </gazebo>
 
+    <!-- LIDAR MAST LINK -->
+
+    <joint name="mast_joint" type="fixed">
+        <parent link="chassis_base" />
+        <child link="mast" />
+        <origin xyz="0 0 1.07" rpy="0 0 0" /> 
+    </joint>
+
+    <link name="mast">
+        <visual>
+            <origin xyz="0 0 0.365" rpy="0 0 0" /> <geometry>
+                <box size="0.05 0.05 0.73" /> </geometry>
+            <material name="white" />
+        </visual>
+        <collision>
+            <origin xyz="0 0 0.365" rpy="0 0 0" />
+            <geometry>
+                <box size="0.05 0.05 0.73" />
+            </geometry>
+        </collision>
+        <xacro:inertial_box mass="5.0" x=".05" y=".05" z="0.365">
+            <origin xyz="${chassis_length/2} 0 0.535" rpy="0 0 0"/>
+        </xacro:inertial_box>
+    </link>
+
+    <gazebo reference="mast">
+        <material>Gazebo/White</material>
+    </gazebo>
+
+    <!-- SEAT LINK -->
+
+    <joint name="seat_joint" type="fixed">
+        <parent link="chassis_base" />
+        <child link="seat" />
+        <origin xyz="0.465 0 1.07" rpy="0 0 0" /> </joint>
+
+    <link name="seat">
+        <visual>
+            <origin xyz="0 0 -0.05" rpy="0 0 0" /> <geometry>
+                <box size="0.5 0.5 0.5" /> </geometry>
+            <material name="blue" />
+        </visual>
+        <collision>
+            <origin xyz="0 0 0.25" rpy="0 0 0" />
+            <geometry>
+                <box size="0.5 0.5 0.5" />
+            </geometry>
+        </collision>
+        <xacro:inertial_box mass="10.0" x="0" y="0" z="0.25">
+            <origin xyz="0 0 0.25" rpy="0 0 0"/>
+        </xacro:inertial_box>
+
+    </link> 
+
+    <gazebo reference="seat">
+        <material>Gazebo/Blue</material>
+    </gazebo>
+    
     <!-- LEFT WHEEL LINK -->
 
     <joint name="left_wheel_joint" type="continuous">
