@@ -86,7 +86,7 @@ def generate_launch_description():
         executable='pointcloud_to_laserscan_node',
         name='pointcloud_to_laserscan',
         remappings=[
-            ('cloud_in', '/points'),
+            ('cloud_in', '/ros_points'),
             ('scan', '/scan')
         ],
         parameters=[{
