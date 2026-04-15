@@ -34,6 +34,7 @@ COMPONENTS=(
   "crop_self:crop_self_hits.py"
   "rsp:robot_state_publisher"
   "spawner:controller_manager .*spawner"
+  "gui:keyboard_gui.py"
 )
 
 FORCE=0
@@ -272,6 +273,11 @@ xterm "${XTERM_FONT_ARGS[@]}" -title "autogiro teleop — focus to drive" \
 TELEOP_PID=$!
 PIDS+=("${TELEOP_PID}")
 echo "${TELEOP_PID}" >> "${PIDFILE}"
+
+echo "[launch_all] Starting control GUI..."
+AUTOGIRO_CONFIG_DIR="${PKG_DIR}/config" \
+AUTOGIRO_WS_SETUP="${WS_SETUP}" \
+    run_bg "gui" python3 "${SCRIPT_DIR}/keyboard_gui.py" --ros-args -p use_sim_time:=true
 
 echo "[launch_all] All components started. Focus the teleop xterm to drive."
 echo "[launch_all] Press Ctrl-C here to tear everything down."
