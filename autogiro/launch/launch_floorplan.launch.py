@@ -83,6 +83,14 @@ def generate_launch_description():
         output='screen'
     )
 
+    crop_self_node = Node(
+        package='autogiro',
+        executable='crop_self_hits.py',
+        name='crop_self_hits',
+        parameters=[{'use_sim_time': True}],
+        output='screen',
+    )
+
     # ADDED: PointCloud to LaserScan converter
     pctols_node = Node(
         package='pointcloud_to_laserscan',
@@ -136,5 +144,6 @@ def generate_launch_description():
         delayed_diff_drive_spawner,
         delayed_joint_broad_spawner, 
         clock_bridge,
+        crop_self_node,
         pctols_node # ADDED: Make sure to return the new node
     ])
