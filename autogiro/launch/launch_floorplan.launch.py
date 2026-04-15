@@ -44,7 +44,7 @@ def generate_launch_description():
     gazebo = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([os.path.join(
                     get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')]),
-                    launch_arguments={'gz_args': f'-r {world_file}'}.items()
+                    launch_arguments={'gz_args': f'-r --render-engine ogre {world_file}'}.items() # render engine ogre is required for WSL?
              )
 
     # Run the spawner node from the ros_gz_sim package
@@ -73,11 +73,22 @@ def generate_launch_description():
     clock_bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
+        # Gazebo's gpu_lidar with <topic>points</topic> publishes the LaserScan
+        # on /points and the PointCloud2 on /points/points — we want the cloud.
         arguments=[
-            '/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock', 
-            '/points@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked'
+            '/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock',
+            '/points/points@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked'
         ],
+        parameters=[{'use_sim_time': True}],
         output='screen'
+    )
+
+    crop_self_node = Node(
+        package='autogiro',
+        executable='crop_self_hits.py',
+        name='crop_self_hits',
+        parameters=[{'use_sim_time': True}],
+        output='screen',
     )
 
     # ADDED: PointCloud to LaserScan converter
@@ -86,11 +97,11 @@ def generate_launch_description():
         executable='pointcloud_to_laserscan_node',
         name='pointcloud_to_laserscan',
         remappings=[
-            ('cloud_in', '/ros_points'),
+            ('cloud_in', '/points_filtered'),
             ('scan', '/scan')
         ],
         parameters=[{
-            # 'use_sim_time': True,
+            'use_sim_time': True,
             'target_frame': 'laser_frame',
             'transform_tolerance': 0.01,
             'min_height': 0.1,  
@@ -101,7 +112,8 @@ def generate_launch_description():
             'scan_time': 0.1,
             'range_min': 0.2,
             'range_max': 20.0,
-            'use_inf': True,
+            'use_inf': False,
+            'inf_epsilon': 1.0,
         }]
     )
 
@@ -132,5 +144,6 @@ def generate_launch_description():
         delayed_diff_drive_spawner,
         delayed_joint_broad_spawner, 
         clock_bridge,
+        crop_self_node,
         pctols_node # ADDED: Make sure to return the new node
     ])

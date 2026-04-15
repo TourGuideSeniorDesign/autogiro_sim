@@ -71,8 +71,9 @@ def generate_launch_description():
     clock_bridge = Node(
     	package='ros_gz_bridge',
    	 executable='parameter_bridge',
-    	arguments=['/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock', 
+    	arguments=['/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock',
     		   '/scan@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked'],
+    	parameters=[{'use_sim_time': True}],
     	output='screen'
     )
 
