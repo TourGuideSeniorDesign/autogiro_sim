@@ -31,6 +31,7 @@ COMPONENTS=(
   "gazebo:(gz sim|ign gazebo|ruby .*gz sim)"
   "bridge:ros_gz_bridge parameter_bridge"
   "pc2ls:pointcloud_to_laserscan_node"
+  "crop_self:crop_self_hits.py"
   "rsp:robot_state_publisher"
   "spawner:controller_manager .*spawner"
 )
@@ -248,6 +249,9 @@ run_bg() {
 echo "[launch_all] Starting floorplan sim..."
 run_bg "floorplan" ros2 launch autogiro launch_floorplan.launch.py
 sleep 6
+
+echo "[launch_all] Starting self-hit cropper..."
+run_bg "crop_self" python3 "${SCRIPT_DIR}/crop_self_hits.py" --ros-args -p use_sim_time:=true
 
 echo "[launch_all] Starting rviz2..."
 run_bg "rviz2" rviz2 -d "${RVIZ_CONFIG}"
