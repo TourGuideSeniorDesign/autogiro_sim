@@ -104,7 +104,8 @@ def generate_launch_description():
             'scan_time': 0.1,
             'range_min': 0.2,
             'range_max': 20.0,
-            'use_inf': True,
+            'use_inf': False,
+            'inf_epsilon': 1.0,
         }]
     )
 
