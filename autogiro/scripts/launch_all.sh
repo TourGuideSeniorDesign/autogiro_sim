@@ -254,7 +254,7 @@ echo "[launch_all] Starting self-hit cropper..."
 run_bg "crop_self" python3 "${SCRIPT_DIR}/crop_self_hits.py" --ros-args -p use_sim_time:=true
 
 echo "[launch_all] Starting rviz2..."
-run_bg "rviz2" rviz2 -d "${RVIZ_CONFIG}"
+run_bg "rviz2" rviz2 -d "${RVIZ_CONFIG}" --ros-args -p use_sim_time:=true
 
 echo "[launch_all] Starting SLAM toolbox..."
 run_bg "slam" ros2 launch slam_toolbox online_async_launch.py \
@@ -268,7 +268,7 @@ echo "[launch_all] Starting teleop_twist_keyboard (focus its window to drive)...
 xterm "${XTERM_FONT_ARGS[@]}" -title "autogiro teleop — focus to drive" \
       -geometry 80x24 -hold \
       -e bash -lc "${SOURCE_CMD}; exec ros2 run teleop_twist_keyboard teleop_twist_keyboard \
-              --ros-args -r cmd_vel:=cmd_vel_joy" 2>/dev/null &
+              --ros-args -r cmd_vel:=cmd_vel_joy -p use_sim_time:=true" 2>/dev/null &
 TELEOP_PID=$!
 PIDS+=("${TELEOP_PID}")
 echo "${TELEOP_PID}" >> "${PIDFILE}"

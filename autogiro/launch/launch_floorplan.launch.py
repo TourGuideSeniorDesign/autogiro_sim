@@ -79,6 +79,7 @@ def generate_launch_description():
             '/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock',
             '/points/points@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked'
         ],
+        parameters=[{'use_sim_time': True}],
         output='screen'
     )
 
@@ -92,7 +93,7 @@ def generate_launch_description():
             ('scan', '/scan')
         ],
         parameters=[{
-            # 'use_sim_time': True,
+            'use_sim_time': True,
             'target_frame': 'laser_frame',
             'transform_tolerance': 0.01,
             'min_height': 0.1,  
