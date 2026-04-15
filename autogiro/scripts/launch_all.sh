@@ -257,7 +257,9 @@ echo "[launch_all] Starting rviz2..."
 run_bg "rviz2" rviz2 -d "${RVIZ_CONFIG}"
 
 echo "[launch_all] Starting SLAM toolbox..."
-run_bg "slam" ros2 launch slam_toolbox online_async_launch.py use_sim_time:=True
+run_bg "slam" ros2 launch slam_toolbox online_async_launch.py \
+    use_sim_time:=True \
+    slam_params_file:="${PKG_DIR}/config/mapper_params_online_async.yaml"
 
 echo "[launch_all] Starting teleop_twist_keyboard (focus its window to drive)..."
 # Teleop needs its own terminal because it reads stdin directly.
