@@ -44,7 +44,7 @@ def generate_launch_description():
     gazebo = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([os.path.join(
                     get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')]),
-                    launch_arguments={'gz_args': f'-r {world_file}'}.items()
+                    launch_arguments={'gz_args': f'-r --render-engine ogre {world_file}'}.items() # render engine ogre is required for WSL?
              )
 
     # Run the spawner node from the ros_gz_sim package
@@ -73,9 +73,11 @@ def generate_launch_description():
     clock_bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
+        # Gazebo's gpu_lidar with <topic>points</topic> publishes the LaserScan
+        # on /points and the PointCloud2 on /points/points — we want the cloud.
         arguments=[
-            '/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock', 
-            '/points@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked'
+            '/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock',
+            '/points/points@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked'
         ],
         output='screen'
     )
@@ -86,7 +88,7 @@ def generate_launch_description():
         executable='pointcloud_to_laserscan_node',
         name='pointcloud_to_laserscan',
         remappings=[
-            ('cloud_in', '/ros_points'),
+            ('cloud_in', '/points/points'),
             ('scan', '/scan')
         ],
         parameters=[{
