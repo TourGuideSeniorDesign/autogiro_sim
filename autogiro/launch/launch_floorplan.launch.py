@@ -44,7 +44,7 @@ def generate_launch_description():
     gazebo = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([os.path.join(
                     get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')]),
-                    launch_arguments={'gz_args': f'-r --render-engine ogre {world_file}'}.items() # render engine ogre is required for WSL?
+                    launch_arguments={'gz_args': f'-r {world_file}'}.items()
              )
 
     # Run the spawner node from the ros_gz_sim package
