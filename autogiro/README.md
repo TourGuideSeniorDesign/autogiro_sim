@@ -80,6 +80,75 @@ rviz2
 
 In the RViz2 Displays panel, click **Add** and choose **RobotModel**. Expand the dropdown until **Description Topic** is visible, then set it to `/robot_description`. For a top-down view, select **TopDownOrtho** from the camera views in the top-right panel.
 
+## Mapping and Localization Workflow
+
+The workflow is: build a map with SLAM, save it to `maps/`, then relaunch using AMCL localization against the saved map.
+
+### Phase A — Build a map
+
+Each command in its own terminal.
+
+```bash
+# Terminal 1: sim + robot + sensors
+ros2 launch autogiro launch_floorplan.launch.py
+
+# Terminal 2: slam_toolbox in mapping mode
+ros2 launch autogiro online_async_launch.py
+
+# Terminal 3: drive the robot around until the map looks complete in RViz
+ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=cmd_vel_joy
+```
+
+In RViz, add a `Map` display on topic `/map` to see the map fill in.
+
+### Phase B — Save the map
+
+From the package source directory (so the `maps/` folder is picked up as the default output dir):
+
+```bash
+cd ~/ros2_ws/autogiro_sim/autogiro
+ros2 run autogiro save_map.sh acopian
+```
+
+This writes four files into `maps/`:
+
+- `acopian.yaml` + `acopian.pgm` — nav2/AMCL format (occupancy grid)
+- `acopian.posegraph` + `acopian.data` — slam_toolbox format (for resuming mapping or slam_toolbox localization mode)
+
+Rebuild so the installed share directory picks up the new map:
+
+```bash
+cd ~/ros2_ws
+colcon build --packages-select autogiro
+source install/setup.bash
+```
+
+### Phase C — Launch with localization
+
+```bash
+# Terminal 1: sim + robot + sensors
+ros2 launch autogiro launch_floorplan.launch.py
+
+# Terminal 2: AMCL + map_server (defaults to maps/acopian.yaml)
+ros2 launch autogiro localization_launch.py
+```
+
+To use a different saved map:
+
+```bash
+ros2 launch autogiro localization_launch.py map:=/absolute/path/to/other.yaml
+```
+
+AMCL's initial pose is seeded from `config/nav2_params.yaml` to match the Gazebo spawn location. Drive the robot a short distance for the particle cloud to converge, or override via the `2D Pose Estimate` tool in RViz.
+
+### Phase D — Optional: navigation
+
+After Phase C, launch the nav2 stack and send goals via RViz's `2D Goal Pose`:
+
+```bash
+ros2 launch autogiro navigation_launch.py
+```
+
 ## Other Launch Configurations
 
 | Launch File | Description |

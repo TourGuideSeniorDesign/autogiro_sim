@@ -70,12 +70,14 @@ endif()
 
 # This is the most important part for your URDF and Launch files
 install(
-  DIRECTORY config description launch worlds models
+  DIRECTORY config description launch maps worlds models
   DESTINATION share/${PROJECT_NAME}
 )
 
 install(
-  PROGRAMS scripts/crop_self_hits.py
+  PROGRAMS
+    scripts/crop_self_hits.py
+    scripts/save_map.sh
   DESTINATION lib/${PROJECT_NAME}
 )
 

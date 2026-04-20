@@ -14,12 +14,12 @@ slam_toolbox:
     map_frame: map
     base_frame: base_footprint
     scan_topic: /scan
-    mode: mapping #switch to "localization" instead of "mapping" if doing that
+    mode: localization #switch to "localization" instead of "mapping" if doing that
 
     # Localization-mode settings (disabled — we're building a fresh map):
-    # map_file_name: /home/dev/dev_ws/my_map_serial
-    # map_start_pose: [0.0, 0.0, 0.0]
-    # map_start_at_dock: true
+    map_file_name: /home/hillba/ros2_ws/autogiro_sim/autogiro/maps/acopian
+    map_start_pose: [0.0, 0.0, 0.0]
+    map_start_at_dock: true
 
     debug_logging: false
     throttle_scans: 1
