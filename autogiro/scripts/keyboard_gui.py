@@ -121,7 +121,8 @@ class App:
         self.map_info = None  # (res, origin_x, origin_y, width_px, height_px)
         self.scale = 1.0  # canvas_px / map_px
         self.offset = (0, 0)  # (dx, dy) canvas pixel offset where map image starts
-        self.goal_world = None  # (x, y)
+        self.goal_world = None  # (x, y, yaw)
+        self._drag_start_canvas = None
         self.nav2_launched = False
 
         self._build()
@@ -176,6 +177,8 @@ class App:
                                 cursor="crosshair")
         self.canvas.pack(fill="both", expand=True, padx=10, pady=10)
         self.canvas.bind("<Button-1>", self._on_click)
+        self.canvas.bind("<B1-Motion>", self._on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_release)
         self.canvas.bind("<Configure>", lambda _e: self._redraw())
 
         # Side panel
@@ -184,7 +187,7 @@ class App:
         side.pack_propagate(False)
 
         self._section(side, "Navigation")
-        self.goal_label = ttk.Label(side, text="No goal placed.\nClick the map to set one.",
+        self.goal_label = ttk.Label(side, text="No goal placed.\nClick and drag to set pose.",
                                     style="Muted.TLabel", justify="left")
         self.goal_label.pack(fill="x", padx=16, pady=(0, 8))
 
@@ -277,15 +280,17 @@ class App:
                                        fill=ACCENT, outline="#0b1320", width=1,
                                        tags="overlay")
         if self.goal_world is not None:
-            gx, gy = self.goal_world
+            gx, gy, gyaw = self.goal_world
             cx, cy = self._world_to_canvas(gx, gy)
             r = 9
             self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
                                     outline=ACCENT_HOT, width=2, tags="overlay")
-            self.canvas.create_line(cx - r - 4, cy, cx + r + 4, cy,
-                                    fill=ACCENT_HOT, tags="overlay")
-            self.canvas.create_line(cx, cy - r - 4, cx, cy + r + 4,
-                                    fill=ACCENT_HOT, tags="overlay")
+            arrow_len = 28
+            ax = cx + math.cos(gyaw) * arrow_len
+            ay = cy - math.sin(gyaw) * arrow_len
+            self.canvas.create_line(cx, cy, ax, ay,
+                                    fill=ACCENT_HOT, width=2, arrow="last",
+                                    arrowshape=(10, 12, 4), tags="overlay")
 
     # ---------- coordinate transforms ----------
 
@@ -312,31 +317,64 @@ class App:
     def _on_click(self, event):
         if self.map_info is None:
             return
-        # Reject clicks outside the map image.
         iw, ih = self.map_img.size
         if not (self.offset[0] <= event.x <= self.offset[0] + iw * self.scale and
                 self.offset[1] <= event.y <= self.offset[1] + ih * self.scale):
             return
         wx, wy = self._canvas_to_world(event.x, event.y)
-        self.goal_world = (wx, wy)
-        self.goal_label.config(text=f"Goal: x = {wx:.2f} m,  y = {wy:.2f} m")
+        self._drag_start_canvas = (event.x, event.y)
+        self.goal_world = (wx, wy, 0.0)
+        self.goal_label.config(text=f"Goal: ({wx:.2f}, {wy:.2f})\nDrag to set heading …")
+        self.nav_btn.config(state="disabled")
+        self._draw_overlay(self.bridge.robot_pose)
+
+    def _on_drag(self, event):
+        if self.goal_world is None or self._drag_start_canvas is None:
+            return
+        sx, sy = self._drag_start_canvas
+        dx, dy = event.x - sx, event.y - sy
+        if math.hypot(dx, dy) < 5:
+            return
+        yaw = math.atan2(-dy, dx)
+        self.goal_world = (self.goal_world[0], self.goal_world[1], yaw)
+        deg = math.degrees(yaw)
+        self.goal_label.config(
+            text=f"Goal: ({self.goal_world[0]:.2f}, {self.goal_world[1]:.2f})\n"
+                 f"Heading: {deg:.0f}°")
+        self._draw_overlay(self.bridge.robot_pose)
+
+    def _on_release(self, event):
+        if self.goal_world is None or self._drag_start_canvas is None:
+            return
+        sx, sy = self._drag_start_canvas
+        dx, dy = event.x - sx, event.y - sy
+        if math.hypot(dx, dy) < 5:
+            pose = self.bridge.robot_pose
+            gx, gy = self.goal_world[0], self.goal_world[1]
+            yaw = math.atan2(gy - pose[1], gx - pose[0]) if pose else 0.0
+            self.goal_world = (gx, gy, yaw)
+        self._drag_start_canvas = None
+        deg = math.degrees(self.goal_world[2])
+        self.goal_label.config(
+            text=f"Goal: ({self.goal_world[0]:.2f}, {self.goal_world[1]:.2f})\n"
+                 f"Heading: {deg:.0f}°")
         self.nav_btn.config(state="normal")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _clear_goal(self):
         self.goal_world = None
-        self.goal_label.config(text="No goal placed.\nClick the map to set one.")
+        self._drag_start_canvas = None
+        self.goal_label.config(text="No goal placed.\nClick and drag to set pose.")
         self.nav_btn.config(state="disabled")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _send_goal(self):
         if self.goal_world is None:
             return
-        gx, gy = self.goal_world
-        pose = self.bridge.robot_pose
-        yaw = math.atan2(gy - pose[1], gx - pose[0]) if pose else 0.0
+        gx, gy, yaw = self.goal_world
         self.bridge.publish_goal(gx, gy, yaw)
-        self.status.config(text=f"Goal sent → ({gx:.2f}, {gy:.2f})", foreground=OK)
+        self.status.config(text=f"Goal sent → ({gx:.2f}, {gy:.2f}) @ {math.degrees(yaw):.0f}°",
+                           foreground=OK)
 
     def _launch_nav2(self):
         pkg_share_config = os.environ.get("AUTOGIRO_CONFIG_DIR", "")
