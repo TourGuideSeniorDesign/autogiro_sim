@@ -78,6 +78,7 @@ install(
   PROGRAMS
     scripts/crop_self_hits.py
     scripts/save_map.sh
+    scripts/tour_commander.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
