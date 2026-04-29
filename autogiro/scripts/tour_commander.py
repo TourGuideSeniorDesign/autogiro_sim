@@ -31,7 +31,7 @@ class TourCommander(Node):
         # Wait for Nav2 to be fully online before sending commands
         self.navigator.waitUntilNav2Active()
 
-        # Define your 4th-floor tour waypoints (You will need to adjust these X/Y values)
+        # Define your 4th-floor tour waypoints (You will need to adjust these X/Y values) || MODIFY THIS 
         origin = self.create_pose(0.0, 0.0)
         spot_1 = self.create_pose(5.0, 0.0)  # Example: 5 meters straight down the hall
         spot_2 = self.create_pose(5.0, 5.0, yaw_z=0.707, yaw_w=0.707) # Example: Turn left
