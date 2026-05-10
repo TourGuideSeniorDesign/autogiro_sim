@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Autogiro Sim control panel: live map, click-to-navigate, Nav2 launcher."""
+"""Autogiro Sim control panel: live map, queued Nav2 goals, Nav2 launcher."""
 
 import math
 import os
@@ -7,7 +7,9 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+from dataclasses import dataclass
 from tkinter import ttk
+from typing import Optional
 
 import rclpy
 from rclpy.node import Node
@@ -34,6 +36,18 @@ UNK_RGB = (55, 58, 66)
 
 MAP_FRAME = "map"
 ROBOT_FRAME = "base_link"
+GOAL_REACHED_RADIUS_M = 0.35
+DRAG_HEADING_THRESHOLD_PX = 5
+
+
+@dataclass(frozen=True)
+class Goal:
+    x: float
+    y: float
+    yaw: float
+
+    def summary(self) -> str:
+        return f"x={self.x:.2f}, y={self.y:.2f}, yaw={math.degrees(self.yaw):.0f}°"
 
 
 KEYBOARD_LEGEND = [
@@ -121,13 +135,15 @@ class App:
         self.map_info = None  # (res, origin_x, origin_y, width_px, height_px)
         self.scale = 1.0  # canvas_px / map_px
         self.offset = (0, 0)  # (dx, dy) canvas pixel offset where map image starts
-        self.goal_world = None  # pending/preview goal: (x, y, yaw)
-        self.goal_queue = []  # queued goals: [(x, y, yaw), ...]
-        self.active_goal = None  # goal currently being driven to
+        self.goal_world: Optional[Goal] = None  # pending/preview goal
+        self.goal_queue: list[Goal] = []
+        self.active_goal: Optional[Goal] = None
         self.queue_running = False
-        self.goal_reached_radius = 0.35
+        self.goal_reached_radius = GOAL_REACHED_RADIUS_M
         self._drag_start_canvas = None
-        self.nav2_launched = False
+        self.nav2_proc: Optional[subprocess.Popen] = None
+        self.nav2_launch_count = 0
+        self.nav2_error_message: Optional[str] = None
 
         self._build()
 
@@ -191,8 +207,12 @@ class App:
         side.pack_propagate(False)
 
         self._section(side, "Navigation")
-        self.goal_label = ttk.Label(side, text="No goals queued.\nClick and drag on the map to add one.",
-                                    style="Muted.TLabel", justify="left")
+        self.goal_label = ttk.Label(
+            side,
+            text="No goals queued.\nDrag on the map to add destinations.",
+            style="Muted.TLabel",
+            justify="left",
+        )
         self.goal_label.pack(fill="x", padx=16, pady=(0, 8))
 
         btns = ttk.Frame(side, style="Panel.TFrame")
@@ -200,13 +220,16 @@ class App:
         self.nav_btn = ttk.Button(btns, text="Start Queue", style="Accent.TButton",
                                   command=self._toggle_queue, state="disabled")
         self.nav_btn.pack(fill="x")
-        ttk.Button(btns, text="Clear Pending Goal", style="Ghost.TButton",
+        ttk.Button(btns, text="Cancel Pending Drag", style="Ghost.TButton",
                    command=self._clear_goal).pack(fill="x", pady=(6, 0))
 
         self._section(side, "Nav2")
         self.nav2_btn = ttk.Button(side, text="Start Nav2 Stack", style="Accent.TButton",
                                    command=self._launch_nav2)
-        self.nav2_btn.pack(fill="x", padx=16, pady=(0, 12))
+        self.nav2_btn.pack(fill="x", padx=16, pady=(0, 6))
+        self.nav2_label = ttk.Label(side, text="Nav2 is not launched from this panel.",
+                                    style="Muted.TLabel", justify="left")
+        self.nav2_label.pack(fill="x", padx=16, pady=(0, 12))
 
         self._section(side, "Goal Queue")
         queue_frame = ttk.Frame(side, style="Panel.TFrame")
@@ -221,12 +244,13 @@ class App:
         queue_btns = ttk.Frame(queue_frame, style="Panel.TFrame")
         queue_btns.pack(fill="x", pady=(6, 0))
         ttk.Button(queue_btns, text="↑", style="Ghost.TButton",
-                   command=self._move_selected_goal_up).grid(row=0, column=0, sticky="ew", padx=(0, 3))
+                   command=self._move_selected_goal_up).grid(
+                       row=0, column=0, sticky="ew", padx=(0, 3))
         ttk.Button(queue_btns, text="↓", style="Ghost.TButton",
                    command=self._move_selected_goal_down).grid(row=0, column=1, sticky="ew", padx=3)
         ttk.Button(queue_btns, text="Remove", style="Ghost.TButton",
                    command=self._remove_selected_goal).grid(row=0, column=2, sticky="ew", padx=3)
-        ttk.Button(queue_btns, text="Clear", style="Ghost.TButton",
+        ttk.Button(queue_btns, text="Clear Queue", style="Ghost.TButton",
                    command=self._clear_queue).grid(row=0, column=3, sticky="ew", padx=(3, 0))
         for col in range(4):
             queue_btns.columnconfigure(col, weight=1)
@@ -267,6 +291,7 @@ class App:
             self._redraw()
         self._draw_overlay(pose)
         self._maybe_advance_queue(pose)
+        self._refresh_nav2_state()
         self.root.after(100, self._tick)
 
     def _redraw(self):
@@ -307,25 +332,23 @@ class App:
                                        right[0], right[1],
                                        fill=ACCENT, outline="#0b1320", width=1,
                                        tags="overlay")
-        for idx, (gx, gy, gyaw) in enumerate(self.goal_queue, start=1):
-            self._draw_goal_marker(gx, gy, gyaw, ACCENT_HOT, str(idx))
+        for idx, goal in enumerate(self.goal_queue, start=1):
+            self._draw_goal_marker(goal, ACCENT_HOT, str(idx))
         if self.active_goal is not None:
-            gx, gy, gyaw = self.active_goal
-            self._draw_goal_marker(gx, gy, gyaw, OK, "▶")
+            self._draw_goal_marker(self.active_goal, OK, "▶")
         if self.goal_world is not None:
-            gx, gy, gyaw = self.goal_world
-            self._draw_goal_marker(gx, gy, gyaw, ACCENT_HOT, "+")
+            self._draw_goal_marker(self.goal_world, ACCENT_HOT, "+")
 
-    def _draw_goal_marker(self, gx, gy, gyaw, color, label):
-        cx, cy = self._world_to_canvas(gx, gy)
+    def _draw_goal_marker(self, goal: Goal, color, label):
+        cx, cy = self._world_to_canvas(goal.x, goal.y)
         r = 9
         self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
                                 outline=color, width=2, tags="overlay")
         self.canvas.create_text(cx, cy, text=label, fill=color,
                                 font=("TkDefaultFont", 9, "bold"), tags="overlay")
         arrow_len = 28
-        ax = cx + math.cos(gyaw) * arrow_len
-        ay = cy - math.sin(gyaw) * arrow_len
+        ax = cx + math.cos(goal.yaw) * arrow_len
+        ay = cy - math.sin(goal.yaw) * arrow_len
         self.canvas.create_line(cx, cy, ax, ay,
                                 fill=color, width=2, arrow="last",
                                 arrowshape=(10, 12, 4), tags="overlay")
@@ -353,16 +376,14 @@ class App:
     # ---------- actions ----------
 
     def _on_click(self, event):
-        if self.map_info is None:
-            return
-        iw, ih = self.map_img.size
-        if not (self.offset[0] <= event.x <= self.offset[0] + iw * self.scale and
-                self.offset[1] <= event.y <= self.offset[1] + ih * self.scale):
+        if self.map_info is None or not self._is_canvas_point_on_map(event.x, event.y):
             return
         wx, wy = self._canvas_to_world(event.x, event.y)
         self._drag_start_canvas = (event.x, event.y)
-        self.goal_world = (wx, wy, 0.0)
-        self.goal_label.config(text=f"New goal: ({wx:.2f}, {wy:.2f})\nDrag to set heading …")
+        self.goal_world = Goal(wx, wy, 0.0)
+        self._set_navigation_help(
+            f"Creating goal: x={wx:.2f}, y={wy:.2f}\n"
+            "Drag before release to choose its heading. Release to add it to the queue.")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _on_drag(self, event):
@@ -370,14 +391,13 @@ class App:
             return
         sx, sy = self._drag_start_canvas
         dx, dy = event.x - sx, event.y - sy
-        if math.hypot(dx, dy) < 5:
+        if math.hypot(dx, dy) < DRAG_HEADING_THRESHOLD_PX:
             return
         yaw = math.atan2(-dy, dx)
-        self.goal_world = (self.goal_world[0], self.goal_world[1], yaw)
-        deg = math.degrees(yaw)
-        self.goal_label.config(
-            text=f"Goal: ({self.goal_world[0]:.2f}, {self.goal_world[1]:.2f})\n"
-                 f"Heading: {deg:.0f}°")
+        self.goal_world = Goal(self.goal_world.x, self.goal_world.y, yaw)
+        self._set_navigation_help(
+            f"Creating goal: {self.goal_world.summary()}\n"
+            "Release to queue it. Use Cancel Pending Drag to discard before release.")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _on_release(self, event):
@@ -385,29 +405,37 @@ class App:
             return
         sx, sy = self._drag_start_canvas
         dx, dy = event.x - sx, event.y - sy
-        if math.hypot(dx, dy) < 5:
+        if math.hypot(dx, dy) < DRAG_HEADING_THRESHOLD_PX:
             pose = self.bridge.robot_pose
-            gx, gy = self.goal_world[0], self.goal_world[1]
-            yaw = math.atan2(gy - pose[1], gx - pose[0]) if pose else 0.0
-            self.goal_world = (gx, gy, yaw)
+            yaw = (
+                math.atan2(self.goal_world.y - pose[1], self.goal_world.x - pose[0])
+                if pose else 0.0
+            )
+            self.goal_world = Goal(self.goal_world.x, self.goal_world.y, yaw)
         self._drag_start_canvas = None
         self._add_goal_to_queue(self.goal_world)
         self.goal_world = None
         self._draw_overlay(self.bridge.robot_pose)
 
-    def _add_goal_to_queue(self, goal):
+    def _is_canvas_point_on_map(self, x, y):
+        if self.map_img is None:
+            return False
+        iw, ih = self.map_img.size
+        return (self.offset[0] <= x <= self.offset[0] + iw * self.scale and
+                self.offset[1] <= y <= self.offset[1] + ih * self.scale)
+
+    def _add_goal_to_queue(self, goal: Goal):
         self.goal_queue.append(goal)
         self._refresh_queue_display(select=len(self.goal_queue) - 1)
-        gx, gy, yaw = goal
-        self.goal_label.config(
-            text=f"Queued goal #{len(self.goal_queue)}: ({gx:.2f}, {gy:.2f})\n"
-                 f"Heading: {math.degrees(yaw):.0f}°")
+        self._set_navigation_help(
+            f"Queued goal #{len(self.goal_queue)}: {goal.summary()}\n"
+            "Drag on the map to add more, reorder below, then Start Queue.")
         self.status.config(text=f"Added goal #{len(self.goal_queue)} to queue.", foreground=OK)
 
     def _refresh_queue_display(self, select=None):
         self.queue_list.delete(0, tk.END)
-        for idx, (gx, gy, yaw) in enumerate(self.goal_queue, start=1):
-            self.queue_list.insert(tk.END, f"{idx}.  x={gx:.2f}, y={gy:.2f}, yaw={math.degrees(yaw):.0f}°")
+        for idx, goal in enumerate(self.goal_queue, start=1):
+            self.queue_list.insert(tk.END, f"{idx}.  {goal.summary()}")
         if select is not None and self.goal_queue:
             select = max(0, min(select, len(self.goal_queue) - 1))
             self.queue_list.selection_set(select)
@@ -415,7 +443,10 @@ class App:
         if self.queue_running:
             self.nav_btn.config(state="normal", text="Stop Queue")
         else:
-            self.nav_btn.config(state="normal" if self.goal_queue else "disabled", text="Start Queue")
+            self.nav_btn.config(
+                state="normal" if self.goal_queue else "disabled",
+                text="Start Queue",
+            )
 
     def _selected_queue_index(self):
         selection = self.queue_list.curselection()
@@ -425,16 +456,18 @@ class App:
         idx = self._selected_queue_index()
         if idx is None:
             return
-        gx, gy, yaw = self.goal_queue[idx]
-        self.goal_label.config(
-            text=f"Selected goal #{idx + 1}: ({gx:.2f}, {gy:.2f})\n"
-                 f"Heading: {math.degrees(yaw):.0f}°")
+        goal = self.goal_queue[idx]
+        self._set_navigation_help(
+            f"Selected queued goal #{idx + 1}: {goal.summary()}\n"
+            "Use ↑/↓ to reorder it, Remove to delete it, or Clear Queue to "
+            "delete all queued goals.")
 
     def _move_selected_goal_up(self):
         idx = self._selected_queue_index()
         if idx is None or idx <= 0:
             return
-        self.goal_queue[idx - 1], self.goal_queue[idx] = self.goal_queue[idx], self.goal_queue[idx - 1]
+        self.goal_queue[idx - 1], self.goal_queue[idx] = (
+            self.goal_queue[idx], self.goal_queue[idx - 1])
         self._refresh_queue_display(select=idx - 1)
         self._draw_overlay(self.bridge.robot_pose)
 
@@ -442,29 +475,46 @@ class App:
         idx = self._selected_queue_index()
         if idx is None or idx >= len(self.goal_queue) - 1:
             return
-        self.goal_queue[idx + 1], self.goal_queue[idx] = self.goal_queue[idx], self.goal_queue[idx + 1]
+        self.goal_queue[idx + 1], self.goal_queue[idx] = (
+            self.goal_queue[idx], self.goal_queue[idx + 1])
         self._refresh_queue_display(select=idx + 1)
         self._draw_overlay(self.bridge.robot_pose)
 
     def _remove_selected_goal(self):
         idx = self._selected_queue_index()
         if idx is None:
+            self._set_navigation_help("Select a queued goal first, then press Remove.")
             return
         removed = self.goal_queue.pop(idx)
-        self._refresh_queue_display(select=min(idx, len(self.goal_queue) - 1) if self.goal_queue else None)
-        self.goal_label.config(text=f"Removed queued goal at ({removed[0]:.2f}, {removed[1]:.2f}).")
+        next_selection = min(idx, len(self.goal_queue) - 1) if self.goal_queue else None
+        self._refresh_queue_display(select=next_selection)
+        self._set_navigation_help(
+            f"Removed queued goal: {removed.summary()}\n"
+            "The active Nav2 goal, if any, is unchanged.")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _clear_queue(self):
+        if not self.goal_queue:
+            self._set_navigation_help(
+                "The queued-goals list is already empty.\n"
+                "Drag on the map to add destinations.")
+            return
         self.goal_queue.clear()
         self._refresh_queue_display()
-        self.goal_label.config(text="Queue cleared.\nClick and drag on the map to add goals.")
+        self._set_navigation_help(
+            "Queued goals cleared.\n"
+            "Active Nav2 goal, if any, is unchanged. Drag on the map to add more.")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _clear_goal(self):
+        if self.goal_world is None:
+            self._set_navigation_help(
+                "No pending drag to cancel.\n"
+                "Queued goals are managed in the Goal Queue controls below.")
+            return
         self.goal_world = None
         self._drag_start_canvas = None
-        self.goal_label.config(text="No pending goal.\nClick and drag on the map to add one.")
+        self._set_navigation_help("Pending drag canceled.\nQueued goals were not changed.")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _toggle_queue(self):
@@ -472,10 +522,19 @@ class App:
             self.queue_running = False
             self.active_goal = None
             self._refresh_queue_display()
-            self.status.config(text="Goal queue stopped. Current Nav2 goal may continue.", foreground=MUTED)
+            self._set_navigation_help(
+                "Queue stopped.\n"
+                "Nav2 may continue toward the last sent goal; start the queue "
+                "again for remaining goals.")
+            self.status.config(
+                text="Goal queue stopped. Current Nav2 goal may continue.",
+                foreground=MUTED,
+            )
             self._draw_overlay(self.bridge.robot_pose)
             return
         if not self.goal_queue:
+            self._set_navigation_help(
+                "Add at least one goal by dragging on the map before starting the queue.")
             return
         self.queue_running = True
         self._refresh_queue_display()
@@ -486,30 +545,60 @@ class App:
             self.queue_running = False
             self.active_goal = None
             self._refresh_queue_display()
+            self._set_navigation_help("Queue complete.\nDrag on the map to add more goals.")
             self.status.config(text="Goal queue complete.", foreground=OK)
             self._draw_overlay(self.bridge.robot_pose)
             return
         self.active_goal = self.goal_queue.pop(0)
         self._refresh_queue_display(select=0 if self.goal_queue else None)
-        gx, gy, yaw = self.active_goal
-        self.bridge.publish_goal(gx, gy, yaw)
-        self.status.config(text=f"Goal sent → ({gx:.2f}, {gy:.2f}) @ {math.degrees(yaw):.0f}°",
-                           foreground=OK)
-        self.goal_label.config(text=f"Driving to ({gx:.2f}, {gy:.2f})\n{len(self.goal_queue)} queued after this.")
+        goal = self.active_goal
+        self.bridge.publish_goal(goal.x, goal.y, goal.yaw)
+        self.status.config(
+            text=f"Goal sent → ({goal.x:.2f}, {goal.y:.2f}) @ "
+                 f"{math.degrees(goal.yaw):.0f}°",
+            foreground=OK,
+        )
+        self._set_navigation_help(
+            f"Driving to: {goal.summary()}\n"
+            f"{len(self.goal_queue)} queued after this. Stop Queue pauses automatic advancement.")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _maybe_advance_queue(self, pose):
         if not self.queue_running or self.active_goal is None or pose is None:
             return
-        gx, gy, _yaw = self.active_goal
-        if math.hypot(pose[0] - gx, pose[1] - gy) <= self.goal_reached_radius:
+        goal = self.active_goal
+        if math.hypot(pose[0] - goal.x, pose[1] - goal.y) <= self.goal_reached_radius:
             self._send_next_goal()
 
+    def _set_navigation_help(self, text):
+        self.goal_label.config(text=text)
+
     def _launch_nav2(self):
+        if self._nav2_is_running():
+            self.status.config(text="Nav2 is already running in its xterm.", foreground=MUTED)
+            return
+        try:
+            self.nav2_error_message = None
+            self.nav2_proc = subprocess.Popen(self._nav2_command(), stderr=subprocess.DEVNULL)
+        except OSError as exc:
+            self.nav2_proc = None
+            self.nav2_error_message = f"Could not launch Nav2: {exc}"
+            self.nav2_btn.config(state="normal", text="Start Nav2 Stack")
+            self.nav2_label.config(text=self.nav2_error_message)
+            self.status.config(
+                text="Could not launch Nav2 — check xterm/ROS environment.",
+                foreground=ACCENT_HOT,
+            )
+            return
+        self.nav2_launch_count += 1
+        self._refresh_nav2_state()
+        self.status.config(text="Nav2 launched — queue goals, then Start Queue.", foreground=OK)
+
+    def _nav2_command(self):
         pkg_share_config = os.environ.get("AUTOGIRO_CONFIG_DIR", "")
         params = os.path.join(pkg_share_config, "nav2_params.yaml")
         ws_setup = os.environ.get("AUTOGIRO_WS_SETUP", "")
-        cmd = [
+        return [
             "xterm",
             "-fa", "DejaVu Sans Mono", "-fs", "11",
             "-title", "Nav2",
@@ -527,11 +616,32 @@ class App:
             f"ros2 launch nav2_bringup navigation_launch.py "
             f"use_sim_time:=True params_file:={params}"
         ]
-        subprocess.Popen(cmd, stderr=subprocess.DEVNULL)
-        self.nav2_launched = True
-        self.nav2_btn.config(state="disabled", text="Nav2 launched")
-        self.status.config(text="Nav2 launched — place a goal on the map.",
-                           foreground=OK)
+
+    def _nav2_is_running(self):
+        return self.nav2_proc is not None and self.nav2_proc.poll() is None
+
+    def _refresh_nav2_state(self):
+        if self._nav2_is_running():
+            self.nav2_btn.config(state="disabled", text="Nav2 Running")
+            self.nav2_label.config(
+                text=f"Running in xterm (PID {self.nav2_proc.pid}). "
+                     "Close that window to relaunch.")
+            return
+        if self.nav2_proc is not None:
+            code = self.nav2_proc.poll()
+            self.nav2_proc = None
+            self.nav2_btn.config(state="normal", text="Relaunch Nav2 Stack")
+            self.nav2_label.config(text=f"Nav2 exited with code {code}. You can relaunch it here.")
+            return
+        if self.nav2_error_message:
+            self.nav2_btn.config(state="normal", text="Start Nav2 Stack")
+            self.nav2_label.config(text=self.nav2_error_message)
+        elif self.nav2_launch_count:
+            self.nav2_btn.config(state="normal", text="Relaunch Nav2 Stack")
+            self.nav2_label.config(text="Nav2 is not running. You can relaunch it here.")
+        else:
+            self.nav2_btn.config(state="normal", text="Start Nav2 Stack")
+            self.nav2_label.config(text="Nav2 is not launched from this panel yet.")
 
 
 def main():
