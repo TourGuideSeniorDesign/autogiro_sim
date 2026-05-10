@@ -12,9 +12,12 @@ from tkinter import ttk
 from typing import Optional
 
 import rclpy
+from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy, QoSHistoryPolicy
+from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped
+from nav2_msgs.action import NavigateThroughPoses
 from nav_msgs.msg import OccupancyGrid
 from tf2_ros import Buffer, TransformListener, TransformException
 
@@ -38,6 +41,7 @@ MAP_FRAME = "map"
 ROBOT_FRAME = "base_link"
 GOAL_REACHED_RADIUS_M = 0.35
 DRAG_HEADING_THRESHOLD_PX = 5
+SEPARATOR = "#3a3d47"
 
 
 @dataclass(frozen=True)
@@ -48,17 +52,6 @@ class Goal:
 
     def summary(self) -> str:
         return f"x={self.x:.2f}, y={self.y:.2f}, yaw={math.degrees(self.yaw):.0f}°"
-
-
-KEYBOARD_LEGEND = [
-    ("i / ,", "forward / backward"),
-    ("j / l", "rotate left / right"),
-    ("u o m .", "diagonal / arc motion"),
-    ("k / K", "stop"),
-    ("q / z", "all speed +/- 10%"),
-    ("w / x", "linear +/- 10%"),
-    ("e / c", "angular +/- 10%"),
-]
 
 
 class RosBridge(Node):
@@ -76,7 +69,8 @@ class RosBridge(Node):
             history=QoSHistoryPolicy.KEEP_LAST,
         )
         self.create_subscription(OccupancyGrid, "/map", self._on_map, map_qos)
-        self.goal_pub = self.create_publisher(PoseStamped, "/goal_pose", 10)
+        self.nav_client = ActionClient(self, NavigateThroughPoses, "navigate_through_poses")
+        self._route_goal_handle = None
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -99,7 +93,7 @@ class RosBridge(Node):
         with self.lock:
             self.robot_pose = (t.x, t.y, yaw)
 
-    def publish_goal(self, x: float, y: float, yaw: float):
+    def make_pose(self, x: float, y: float, yaw: float) -> PoseStamped:
         msg = PoseStamped()
         msg.header.frame_id = MAP_FRAME
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -107,7 +101,43 @@ class RosBridge(Node):
         msg.pose.position.y = y
         msg.pose.orientation.z = math.sin(yaw / 2.0)
         msg.pose.orientation.w = math.cos(yaw / 2.0)
-        self.goal_pub.publish(msg)
+        return msg
+
+    def send_route(self, goals, done_cb, feedback_cb=None) -> bool:
+        if not self.nav_client.wait_for_server(timeout_sec=0.1):
+            return False
+        action_goal = NavigateThroughPoses.Goal()
+        action_goal.poses = [self.make_pose(goal.x, goal.y, goal.yaw) for goal in goals]
+        future = self.nav_client.send_goal_async(
+            action_goal,
+            feedback_callback=feedback_cb,
+        )
+        future.add_done_callback(lambda f: self._on_route_goal_response(f, done_cb))
+        return True
+
+    def cancel_route(self):
+        if self._route_goal_handle is not None:
+            self._route_goal_handle.cancel_goal_async()
+            self._route_goal_handle = None
+
+    def _on_route_goal_response(self, future, done_cb):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            done_cb(False, "Route was rejected by Nav2.")
+            return
+        self._route_goal_handle = goal_handle
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(lambda f: self._on_route_result(f, done_cb))
+
+    def _on_route_result(self, future, done_cb):
+        result = future.result()
+        self._route_goal_handle = None
+        if result.status == GoalStatus.STATUS_SUCCEEDED:
+            done_cb(True, "Route complete.")
+        elif result.status == GoalStatus.STATUS_CANCELED:
+            done_cb(False, "Route canceled.")
+        else:
+            done_cb(False, f"Route failed with status {result.status}.")
 
 
 def occgrid_to_image(msg: OccupancyGrid) -> Image.Image:
@@ -151,7 +181,7 @@ class App:
 
     def _build(self):
         self.root.title("Autogiro Sim — Control Panel")
-        self.root.geometry("1180x760")
+        self.root.geometry("1360x800")
         self.root.configure(bg=BG)
 
         style = ttk.Style()
@@ -177,6 +207,10 @@ class App:
         style.configure("Ghost.TButton", background=PANEL_HI, foreground=FG,
                         borderwidth=0, padding=(12, 6))
         style.map("Ghost.TButton", background=[("active", "#3c4048")])
+        style.configure("Coord.TLabel", background=PANEL, foreground=ACCENT,
+                        font=("Courier", 10))
+        style.configure("Readout.TLabel", background=PANEL, foreground=ACCENT,
+                        font=("Courier", 11))
 
         root = self.root
 
@@ -200,38 +234,62 @@ class App:
         self.canvas.bind("<B1-Motion>", self._on_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
         self.canvas.bind("<Configure>", lambda _e: self._redraw())
+        self.canvas.bind("<Motion>", self._on_motion)
+        self.canvas.bind("<Leave>", lambda _e: self.coord_label.config(text=""))
+        self.coord_label = ttk.Label(map_card, text="", style="Coord.TLabel")
+        self.coord_label.pack(fill="x", padx=10, pady=(0, 6))
+
+        self.root.bind("<Delete>", lambda _e: self._remove_selected_goal())
+        self.root.bind("<BackSpace>", lambda _e: self._remove_selected_goal())
+        self.root.bind("<Escape>", lambda _e: self._clear_goal())
 
         # Side panel
-        side = ttk.Frame(body, style="Panel.TFrame", width=320)
+        side = ttk.Frame(body, style="Panel.TFrame", width=400)
         side.pack(side="right", fill="y", padx=(12, 0))
         side.pack_propagate(False)
+
+        self._section(side, "Robot")
+        self.robot_info = ttk.Label(side, text="Waiting for TF …",
+                                     style="Readout.TLabel")
+        self.robot_info.pack(fill="x", padx=16, pady=(0, 10))
+        ttk.Separator(side, orient="horizontal").pack(fill="x", padx=16, pady=(0, 2))
 
         self._section(side, "Navigation")
         self.goal_label = ttk.Label(
             side,
-            text="No goals queued.\nDrag on the map to add destinations.",
+            text="Route is empty.\nDrag on the map to add a destination.",
             style="Muted.TLabel",
             justify="left",
+            wraplength=360,
         )
         self.goal_label.pack(fill="x", padx=16, pady=(0, 8))
 
         btns = ttk.Frame(side, style="Panel.TFrame")
         btns.pack(fill="x", padx=16, pady=(0, 12))
-        self.nav_btn = ttk.Button(btns, text="Start Queue", style="Accent.TButton",
+        self.nav_btn = ttk.Button(btns, text="Start Route", style="Accent.TButton",
                                   command=self._toggle_queue, state="disabled")
         self.nav_btn.pack(fill="x")
-        ttk.Button(btns, text="Cancel Pending Drag", style="Ghost.TButton",
+        ttk.Button(btns, text="Discard Draft", style="Ghost.TButton",
                    command=self._clear_goal).pack(fill="x", pady=(6, 0))
 
+        ttk.Separator(side, orient="horizontal").pack(fill="x", padx=16, pady=(8, 2))
+
         self._section(side, "Nav2")
-        self.nav2_btn = ttk.Button(side, text="Start Nav2 Stack", style="Accent.TButton",
+        self.nav2_btn = ttk.Button(side, text="Launch Nav2", style="Accent.TButton",
                                    command=self._launch_nav2)
         self.nav2_btn.pack(fill="x", padx=16, pady=(0, 6))
-        self.nav2_label = ttk.Label(side, text="Nav2 is not launched from this panel.",
-                                    style="Muted.TLabel", justify="left")
+        self.nav2_label = ttk.Label(
+            side,
+            text="Nav2 is not running from this panel.",
+            style="Muted.TLabel",
+            justify="left",
+            wraplength=360,
+        )
         self.nav2_label.pack(fill="x", padx=16, pady=(0, 12))
 
-        self._section(side, "Goal Queue")
+        ttk.Separator(side, orient="horizontal").pack(fill="x", padx=16, pady=(0, 2))
+
+        self._section(side, "Route")
         queue_frame = ttk.Frame(side, style="Panel.TFrame")
         queue_frame.pack(fill="x", padx=16, pady=(0, 12))
         self.queue_list = tk.Listbox(queue_frame, height=7, activestyle="none",
@@ -243,27 +301,23 @@ class App:
 
         queue_btns = ttk.Frame(queue_frame, style="Panel.TFrame")
         queue_btns.pack(fill="x", pady=(6, 0))
-        ttk.Button(queue_btns, text="↑", style="Ghost.TButton",
+        ttk.Button(queue_btns, text="Move Up", style="Ghost.TButton",
                    command=self._move_selected_goal_up).grid(
-                       row=0, column=0, sticky="ew", padx=(0, 3))
-        ttk.Button(queue_btns, text="↓", style="Ghost.TButton",
-                   command=self._move_selected_goal_down).grid(row=0, column=1, sticky="ew", padx=3)
+                       row=0, column=0, sticky="ew", padx=(0, 3), pady=(0, 6))
+        ttk.Button(queue_btns, text="Move Down", style="Ghost.TButton",
+                   command=self._move_selected_goal_down).grid(
+                       row=0, column=1, sticky="ew", padx=(3, 0), pady=(0, 6))
         ttk.Button(queue_btns, text="Remove", style="Ghost.TButton",
-                   command=self._remove_selected_goal).grid(row=0, column=2, sticky="ew", padx=3)
-        ttk.Button(queue_btns, text="Clear Queue", style="Ghost.TButton",
-                   command=self._clear_queue).grid(row=0, column=3, sticky="ew", padx=(3, 0))
-        for col in range(4):
+                   command=self._remove_selected_goal).grid(
+                       row=1, column=0, sticky="ew", padx=(0, 3))
+        ttk.Button(queue_btns, text="Clear All", style="Ghost.TButton",
+                   command=self._clear_queue).grid(
+                       row=1, column=1, sticky="ew", padx=(3, 0))
+        for col in range(2):
             queue_btns.columnconfigure(col, weight=1)
 
-        self._section(side, "Keyboard (teleop window)")
-        legend = ttk.Frame(side, style="Panel.TFrame")
-        legend.pack(fill="x", padx=16, pady=(0, 12))
-        for k, desc in KEYBOARD_LEGEND:
-            row = ttk.Frame(legend, style="Panel.TFrame")
-            row.pack(fill="x", pady=1)
-            ttk.Label(row, text=k, width=10, style="Panel.TLabel",
-                      font=("TkFixedFont", 10, "bold")).pack(side="left")
-            ttk.Label(row, text=desc, style="Muted.TLabel").pack(side="left")
+        self.route_info = ttk.Label(side, text="", style="Muted.TLabel")
+        self.route_info.pack(fill="x", padx=16, pady=(6, 0))
 
         self.root.after(100, self._tick)
 
@@ -290,7 +344,7 @@ class App:
                                     f"@ {msg.info.resolution:.3f} m/px")
             self._redraw()
         self._draw_overlay(pose)
-        self._maybe_advance_queue(pose)
+        self._update_robot_info(pose)
         self._refresh_nav2_state()
         self.root.after(100, self._tick)
 
@@ -338,6 +392,7 @@ class App:
             self._draw_goal_marker(self.active_goal, OK, "▶")
         if self.goal_world is not None:
             self._draw_goal_marker(self.goal_world, ACCENT_HOT, "+")
+        self._draw_scale_bar()
 
     def _draw_goal_marker(self, goal: Goal, color, label):
         cx, cy = self._world_to_canvas(goal.x, goal.y)
@@ -373,6 +428,61 @@ class App:
         my = (h - 1) - img_y
         return (mx * res + ox, my * res + oy)
 
+    # ---------- info overlays ----------
+
+    def _on_motion(self, event):
+        if self.map_info is None or not self._is_canvas_point_on_map(event.x, event.y):
+            self.coord_label.config(text="")
+            return
+        wx, wy = self._canvas_to_world(event.x, event.y)
+        self.coord_label.config(text=f"x {wx:+.3f}   y {wy:+.3f}")
+
+    def _update_robot_info(self, pose):
+        if pose is None:
+            self.robot_info.config(text="Waiting for TF …")
+            return
+        x, y, yaw = pose
+        self.robot_info.config(
+            text=f"x {x:+7.3f}   y {y:+7.3f}   θ {math.degrees(yaw):+6.1f}°")
+
+    def _update_route_info(self):
+        if not self.goal_queue:
+            self.route_info.config(text="")
+            return
+        total = 0.0
+        for i in range(1, len(self.goal_queue)):
+            a, b = self.goal_queue[i - 1], self.goal_queue[i]
+            total += math.hypot(b.x - a.x, b.y - a.y)
+        n = len(self.goal_queue)
+        self.route_info.config(
+            text=f"{n} waypoint{'s' if n != 1 else ''}  ·  {total:.2f} m path")
+
+    def _draw_scale_bar(self):
+        if self.map_info is None:
+            return
+        res = self.map_info[0]
+        px_per_m = self.scale / res
+        bar_m = 1.0
+        for candidate in (0.25, 0.5, 1.0, 2.0, 5.0, 10.0):
+            bar_m = candidate
+            if 40 <= px_per_m * candidate <= 160:
+                break
+        bar_px = px_per_m * bar_m
+        if bar_px < 10:
+            return
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        x0 = cw - bar_px - 16
+        y0 = ch - 18
+        self.canvas.create_line(x0, y0, x0 + bar_px, y0,
+                                fill=MUTED, width=2, tags="overlay")
+        self.canvas.create_line(x0, y0 - 3, x0, y0 + 3,
+                                fill=MUTED, width=1, tags="overlay")
+        self.canvas.create_line(x0 + bar_px, y0 - 3, x0 + bar_px, y0 + 3,
+                                fill=MUTED, width=1, tags="overlay")
+        self.canvas.create_text(x0 + bar_px / 2, y0 - 10, text=f"{bar_m:g} m",
+                                fill=MUTED, font=("TkDefaultFont", 9), tags="overlay")
+
     # ---------- actions ----------
 
     def _on_click(self, event):
@@ -382,8 +492,8 @@ class App:
         self._drag_start_canvas = (event.x, event.y)
         self.goal_world = Goal(wx, wy, 0.0)
         self._set_navigation_help(
-            f"Creating goal: x={wx:.2f}, y={wy:.2f}\n"
-            "Drag before release to choose its heading. Release to add it to the queue.")
+            f"Draft goal: x={wx:.2f}, y={wy:.2f}\n"
+            "Drag to set heading, then release to add it to the route.")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _on_drag(self, event):
@@ -396,8 +506,8 @@ class App:
         yaw = math.atan2(-dy, dx)
         self.goal_world = Goal(self.goal_world.x, self.goal_world.y, yaw)
         self._set_navigation_help(
-            f"Creating goal: {self.goal_world.summary()}\n"
-            "Release to queue it. Use Cancel Pending Drag to discard before release.")
+            f"Draft goal: {self.goal_world.summary()}\n"
+            "Release to add it to the route, or Discard Draft to cancel.")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _on_release(self, event):
@@ -428,9 +538,9 @@ class App:
         self.goal_queue.append(goal)
         self._refresh_queue_display(select=len(self.goal_queue) - 1)
         self._set_navigation_help(
-            f"Queued goal #{len(self.goal_queue)}: {goal.summary()}\n"
-            "Drag on the map to add more, reorder below, then Start Queue.")
-        self.status.config(text=f"Added goal #{len(self.goal_queue)} to queue.", foreground=OK)
+            f"Added destination #{len(self.goal_queue)}: {goal.summary()}\n"
+            "Add more, reorder the route, or press Start Route.")
+        self.status.config(text=f"Added destination #{len(self.goal_queue)}.", foreground=OK)
 
     def _refresh_queue_display(self, select=None):
         self.queue_list.delete(0, tk.END)
@@ -441,12 +551,13 @@ class App:
             self.queue_list.selection_set(select)
             self.queue_list.activate(select)
         if self.queue_running:
-            self.nav_btn.config(state="normal", text="Stop Queue")
+            self.nav_btn.config(state="normal", text="Pause Route")
         else:
             self.nav_btn.config(
                 state="normal" if self.goal_queue else "disabled",
-                text="Start Queue",
+                text="Start Route",
             )
+        self._update_route_info()
 
     def _selected_queue_index(self):
         selection = self.queue_list.curselection()
@@ -458,11 +569,13 @@ class App:
             return
         goal = self.goal_queue[idx]
         self._set_navigation_help(
-            f"Selected queued goal #{idx + 1}: {goal.summary()}\n"
-            "Use ↑/↓ to reorder it, Remove to delete it, or Clear Queue to "
-            "delete all queued goals.")
+            f"Selected destination #{idx + 1}: {goal.summary()}\n"
+            "Use Move Up/Down to reorder, Remove to delete, or Clear All to reset.")
 
     def _move_selected_goal_up(self):
+        if self.queue_running:
+            self._set_navigation_help("Pause the route before reordering destinations.")
+            return
         idx = self._selected_queue_index()
         if idx is None or idx <= 0:
             return
@@ -472,6 +585,9 @@ class App:
         self._draw_overlay(self.bridge.robot_pose)
 
     def _move_selected_goal_down(self):
+        if self.queue_running:
+            self._set_navigation_help("Pause the route before reordering destinations.")
+            return
         idx = self._selected_queue_index()
         if idx is None or idx >= len(self.goal_queue) - 1:
             return
@@ -481,118 +597,143 @@ class App:
         self._draw_overlay(self.bridge.robot_pose)
 
     def _remove_selected_goal(self):
+        if self.queue_running:
+            self._set_navigation_help("Pause the route before removing destinations.")
+            return
         idx = self._selected_queue_index()
         if idx is None:
-            self._set_navigation_help("Select a queued goal first, then press Remove.")
+            self._set_navigation_help("Select a destination first, then press Remove.")
             return
         removed = self.goal_queue.pop(idx)
         next_selection = min(idx, len(self.goal_queue) - 1) if self.goal_queue else None
         self._refresh_queue_display(select=next_selection)
         self._set_navigation_help(
-            f"Removed queued goal: {removed.summary()}\n"
-            "The active Nav2 goal, if any, is unchanged.")
+            f"Removed destination: {removed.summary()}\n"
+            "The current Nav2 goal was not changed.")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _clear_queue(self):
+        if self.queue_running:
+            self._set_navigation_help("Pause the route before clearing saved destinations.")
+            return
         if not self.goal_queue:
             self._set_navigation_help(
-                "The queued-goals list is already empty.\n"
-                "Drag on the map to add destinations.")
+                "The route is already empty.\n"
+                "Drag on the map to add a destination.")
             return
         self.goal_queue.clear()
         self._refresh_queue_display()
         self._set_navigation_help(
-            "Queued goals cleared.\n"
-            "Active Nav2 goal, if any, is unchanged. Drag on the map to add more.")
+            "Route cleared.\n"
+            "Drag on the map to build a new route.")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _clear_goal(self):
         if self.goal_world is None:
             self._set_navigation_help(
-                "No pending drag to cancel.\n"
-                "Queued goals are managed in the Goal Queue controls below.")
+                "No draft goal to discard.\n"
+                "Use the Route controls to edit saved destinations.")
             return
         self.goal_world = None
         self._drag_start_canvas = None
-        self._set_navigation_help("Pending drag canceled.\nQueued goals were not changed.")
+        self._set_navigation_help("Draft goal canceled.\nThe route was not changed.")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _toggle_queue(self):
         if self.queue_running:
-            self.queue_running = False
-            self.active_goal = None
-            self._refresh_queue_display()
-            self._set_navigation_help(
-                "Queue stopped.\n"
-                "Nav2 may continue toward the last sent goal; start the queue "
-                "again for remaining goals.")
-            self.status.config(
-                text="Goal queue stopped. Current Nav2 goal may continue.",
-                foreground=MUTED,
-            )
-            self._draw_overlay(self.bridge.robot_pose)
+            self._pause_route()
             return
         if not self.goal_queue:
             self._set_navigation_help(
-                "Add at least one goal by dragging on the map before starting the queue.")
+                "Add at least one destination before starting the route.")
+            return
+        if not self.bridge.send_route(
+            list(self.goal_queue),
+            done_cb=lambda ok, msg: self.root.after(0, self._on_route_done, ok, msg),
+            feedback_cb=self._on_route_feedback,
+        ):
+            self._set_navigation_help(
+                "Nav2 is not ready yet.\nLaunch Nav2 and wait for the action server, then try again.")
+            self.status.config(text="Nav2 action server is not ready.", foreground=ACCENT_HOT)
             return
         self.queue_running = True
+        self.active_goal = self.goal_queue[0]
         self._refresh_queue_display()
-        self._send_next_goal()
-
-    def _send_next_goal(self):
-        if not self.goal_queue:
-            self.queue_running = False
-            self.active_goal = None
-            self._refresh_queue_display()
-            self._set_navigation_help("Queue complete.\nDrag on the map to add more goals.")
-            self.status.config(text="Goal queue complete.", foreground=OK)
-            self._draw_overlay(self.bridge.robot_pose)
-            return
-        self.active_goal = self.goal_queue.pop(0)
-        self._refresh_queue_display(select=0 if self.goal_queue else None)
-        goal = self.active_goal
-        self.bridge.publish_goal(goal.x, goal.y, goal.yaw)
-        self.status.config(
-            text=f"Goal sent → ({goal.x:.2f}, {goal.y:.2f}) @ "
-                 f"{math.degrees(goal.yaw):.0f}°",
-            foreground=OK,
-        )
         self._set_navigation_help(
-            f"Driving to: {goal.summary()}\n"
-            f"{len(self.goal_queue)} queued after this. Stop Queue pauses automatic advancement.")
+            f"Route started with {len(self.goal_queue)} destination(s).\n"
+            "Nav2 will execute the route as a single NavigateThroughPoses action.")
+        self.status.config(text="Route sent to Nav2.", foreground=OK)
         self._draw_overlay(self.bridge.robot_pose)
 
-    def _maybe_advance_queue(self, pose):
-        if not self.queue_running or self.active_goal is None or pose is None:
+    def _pause_route(self):
+        self.bridge.cancel_route()
+        self.queue_running = False
+        self.active_goal = None
+        self._refresh_queue_display(select=0 if self.goal_queue else None)
+        self._set_navigation_help(
+            "Route paused.\n"
+            "The Nav2 action was canceled. Press Start Route to send the route again.")
+        self.status.config(text="Route paused.", foreground=MUTED)
+        self._draw_overlay(self.bridge.robot_pose)
+
+    def _on_route_feedback(self, feedback_msg):
+        feedback = feedback_msg.feedback
+        remaining = getattr(feedback, "number_of_poses_remaining", None)
+        if remaining is None:
             return
-        goal = self.active_goal
-        if math.hypot(pose[0] - goal.x, pose[1] - goal.y) <= self.goal_reached_radius:
-            self._send_next_goal()
+        self.root.after(0, self._update_route_progress, remaining)
+
+    def _update_route_progress(self, remaining):
+        if not self.queue_running:
+            return
+        completed = max(0, len(self.goal_queue) - remaining)
+        if 0 <= completed < len(self.goal_queue):
+            self.active_goal = self.goal_queue[completed]
+        self.status.config(text=f"Route in progress — {remaining} destination(s) remaining.")
+        self._draw_overlay(self.bridge.robot_pose)
+
+    def _on_route_done(self, ok, message):
+        if not self.queue_running and message == "Route canceled.":
+            return
+        self.queue_running = False
+        self.active_goal = None
+        if ok:
+            self.goal_queue.clear()
+            self._set_navigation_help("Route complete.\nDrag on the map to plan another route.")
+            self.status.config(text=message, foreground=OK)
+        else:
+            self._set_navigation_help(
+                f"{message}\nThe saved route is still available to edit or retry.")
+            self.status.config(text=message, foreground=ACCENT_HOT)
+        self._refresh_queue_display()
+        self._draw_overlay(self.bridge.robot_pose)
 
     def _set_navigation_help(self, text):
         self.goal_label.config(text=text)
 
     def _launch_nav2(self):
         if self._nav2_is_running():
-            self.status.config(text="Nav2 is already running in its xterm.", foreground=MUTED)
+            self.status.config(text="Nav2 is already running.", foreground=MUTED)
             return
         try:
             self.nav2_error_message = None
             self.nav2_proc = subprocess.Popen(self._nav2_command(), stderr=subprocess.DEVNULL)
         except OSError as exc:
             self.nav2_proc = None
-            self.nav2_error_message = f"Could not launch Nav2: {exc}"
-            self.nav2_btn.config(state="normal", text="Start Nav2 Stack")
+            self.nav2_error_message = f"Nav2 launch failed: {exc}"
+            self.nav2_btn.config(state="normal", text="Launch Nav2")
             self.nav2_label.config(text=self.nav2_error_message)
             self.status.config(
-                text="Could not launch Nav2 — check xterm/ROS environment.",
+                text="Nav2 launch failed. Check xterm and the ROS environment.",
                 foreground=ACCENT_HOT,
             )
             return
         self.nav2_launch_count += 1
         self._refresh_nav2_state()
-        self.status.config(text="Nav2 launched — queue goals, then Start Queue.", foreground=OK)
+        self.status.config(
+            text="Nav2 launched. Add destinations, then start the route.",
+            foreground=OK,
+        )
 
     def _nav2_command(self):
         pkg_share_config = os.environ.get("AUTOGIRO_CONFIG_DIR", "")
@@ -624,24 +765,24 @@ class App:
         if self._nav2_is_running():
             self.nav2_btn.config(state="disabled", text="Nav2 Running")
             self.nav2_label.config(
-                text=f"Running in xterm (PID {self.nav2_proc.pid}). "
-                     "Close that window to relaunch.")
+                text=f"Running in xterm, PID {self.nav2_proc.pid}. "
+                     "Close the Nav2 window to relaunch.")
             return
         if self.nav2_proc is not None:
             code = self.nav2_proc.poll()
             self.nav2_proc = None
-            self.nav2_btn.config(state="normal", text="Relaunch Nav2 Stack")
-            self.nav2_label.config(text=f"Nav2 exited with code {code}. You can relaunch it here.")
+            self.nav2_btn.config(state="normal", text="Relaunch Nav2")
+            self.nav2_label.config(text=f"Nav2 exited with code {code}. Relaunch when ready.")
             return
         if self.nav2_error_message:
-            self.nav2_btn.config(state="normal", text="Start Nav2 Stack")
+            self.nav2_btn.config(state="normal", text="Launch Nav2")
             self.nav2_label.config(text=self.nav2_error_message)
         elif self.nav2_launch_count:
-            self.nav2_btn.config(state="normal", text="Relaunch Nav2 Stack")
-            self.nav2_label.config(text="Nav2 is not running. You can relaunch it here.")
+            self.nav2_btn.config(state="normal", text="Relaunch Nav2")
+            self.nav2_label.config(text="Nav2 is not running. Relaunch when ready.")
         else:
-            self.nav2_btn.config(state="normal", text="Start Nav2 Stack")
-            self.nav2_label.config(text="Nav2 is not launched from this panel yet.")
+            self.nav2_btn.config(state="normal", text="Launch Nav2")
+            self.nav2_label.config(text="Nav2 is not running from this panel.")
 
 
 def main():
