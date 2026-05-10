@@ -241,7 +241,6 @@ class App:
 
         self.root.bind("<Delete>", lambda _e: self._remove_selected_goal())
         self.root.bind("<BackSpace>", lambda _e: self._remove_selected_goal())
-        self.root.bind("<Escape>", lambda _e: self._clear_goal())
 
         # Side panel
         side = ttk.Frame(body, style="Panel.TFrame", width=400)
@@ -269,8 +268,6 @@ class App:
         self.nav_btn = ttk.Button(btns, text="Start Route", style="Accent.TButton",
                                   command=self._toggle_queue, state="disabled")
         self.nav_btn.pack(fill="x")
-        ttk.Button(btns, text="Discard Draft", style="Ghost.TButton",
-                   command=self._clear_goal).pack(fill="x", pady=(6, 0))
 
         ttk.Separator(side, orient="horizontal").pack(fill="x", padx=16, pady=(8, 2))
 
@@ -507,7 +504,7 @@ class App:
         self.goal_world = Goal(self.goal_world.x, self.goal_world.y, yaw)
         self._set_navigation_help(
             f"Draft goal: {self.goal_world.summary()}\n"
-            "Release to add it to the route, or Discard Draft to cancel.")
+            "Release to add it to the route.")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _on_release(self, event):
@@ -626,17 +623,6 @@ class App:
         self._set_navigation_help(
             "Route cleared.\n"
             "Drag on the map to build a new route.")
-        self._draw_overlay(self.bridge.robot_pose)
-
-    def _clear_goal(self):
-        if self.goal_world is None:
-            self._set_navigation_help(
-                "No draft goal to discard.\n"
-                "Use the Route controls to edit saved destinations.")
-            return
-        self.goal_world = None
-        self._drag_start_canvas = None
-        self._set_navigation_help("Draft goal canceled.\nThe route was not changed.")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _toggle_queue(self):
