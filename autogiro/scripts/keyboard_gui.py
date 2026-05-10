@@ -8,7 +8,7 @@ import sys
 import threading
 import tkinter as tk
 from dataclasses import dataclass
-from tkinter import ttk
+from tkinter import messagebox, ttk
 from typing import Optional
 
 import rclpy
@@ -633,22 +633,38 @@ class App:
             self._set_navigation_help(
                 "Add at least one destination before starting the route.")
             return
+        self._start_next_route_stop()
+
+    def _start_next_route_stop(self):
+        if not self.goal_queue:
+            self.queue_running = False
+            self.active_goal = None
+            self._refresh_queue_display()
+            self._set_navigation_help("Route complete.\nDrag on the map to plan another route.")
+            self.status.config(text="Route complete.", foreground=OK)
+            self._draw_overlay(self.bridge.robot_pose)
+            return
+        next_goal = self.goal_queue[0]
         if not self.bridge.send_route(
-            list(self.goal_queue),
+            [next_goal],
             done_cb=lambda ok, msg: self.root.after(0, self._on_route_done, ok, msg),
             feedback_cb=self._on_route_feedback,
         ):
+            self.queue_running = False
+            self.active_goal = None
             self._set_navigation_help(
                 "Nav2 is not ready yet.\nLaunch Nav2 and wait for the action server, then try again.")
             self.status.config(text="Nav2 action server is not ready.", foreground=ACCENT_HOT)
+            self._refresh_queue_display(select=0)
+            self._draw_overlay(self.bridge.robot_pose)
             return
         self.queue_running = True
-        self.active_goal = self.goal_queue[0]
-        self._refresh_queue_display()
+        self.active_goal = next_goal
+        self._refresh_queue_display(select=0)
         self._set_navigation_help(
-            f"Route started with {len(self.goal_queue)} destination(s).\n"
-            "Nav2 will execute the route as a single NavigateThroughPoses action.")
-        self.status.config(text="Route sent to Nav2.", foreground=OK)
+            f"Navigating to next destination: {next_goal.summary()}\n"
+            "The route will pause there and ask before continuing.")
+        self.status.config(text="Navigating to next route destination.", foreground=OK)
         self._draw_overlay(self.bridge.robot_pose)
 
     def _pause_route(self):
@@ -658,7 +674,7 @@ class App:
         self._refresh_queue_display(select=0 if self.goal_queue else None)
         self._set_navigation_help(
             "Route paused.\n"
-            "The Nav2 action was canceled. Press Start Route to send the route again.")
+            "The Nav2 action was canceled. Press Start Route to continue from the next destination.")
         self.status.config(text="Route paused.", foreground=MUTED)
         self._draw_overlay(self.bridge.robot_pose)
 
@@ -672,26 +688,54 @@ class App:
     def _update_route_progress(self, remaining):
         if not self.queue_running:
             return
-        completed = max(0, len(self.goal_queue) - remaining)
-        if 0 <= completed < len(self.goal_queue):
-            self.active_goal = self.goal_queue[completed]
-        self.status.config(text=f"Route in progress — {remaining} destination(s) remaining.")
+        self.active_goal = self.goal_queue[0] if self.goal_queue else None
+        self.status.config(text="Navigating to next route destination.")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _on_route_done(self, ok, message):
         if not self.queue_running and message == "Route canceled.":
             return
+        reached_goal = self.active_goal
         self.queue_running = False
         self.active_goal = None
+        if ok and reached_goal is not None:
+            self._refresh_queue_display(select=0)
+            self._draw_overlay(self.bridge.robot_pose)
+            self.status.config(text="Destination reached. Route paused.", foreground=OK)
+            remaining_after_this = max(0, len(self.goal_queue) - 1)
+            continue_route = messagebox.askyesno(
+                "Destination reached",
+                f"Reached destination: {reached_goal.summary()}\n\n"
+                f"Continue to the next stop? ({remaining_after_this} remaining after this)",
+                parent=self.root,
+            )
+            if continue_route:
+                if self.goal_queue and self.goal_queue[0] == reached_goal:
+                    self.goal_queue.pop(0)
+                elif reached_goal in self.goal_queue:
+                    self.goal_queue.remove(reached_goal)
+                self._refresh_queue_display(select=0 if self.goal_queue else None)
+                if self.goal_queue:
+                    self._start_next_route_stop()
+                else:
+                    self._set_navigation_help("Route complete.\nDrag on the map to plan another route.")
+                    self.status.config(text="Route complete.", foreground=OK)
+                    self._draw_overlay(self.bridge.robot_pose)
+            else:
+                self._set_navigation_help(
+                    "Route paused at the reached destination.\n"
+                    "Press Start Route to retry/continue when ready.")
+                self._refresh_queue_display(select=0 if self.goal_queue else None)
+                self._draw_overlay(self.bridge.robot_pose)
+            return
         if ok:
-            self.goal_queue.clear()
             self._set_navigation_help("Route complete.\nDrag on the map to plan another route.")
             self.status.config(text=message, foreground=OK)
         else:
             self._set_navigation_help(
                 f"{message}\nThe saved route is still available to edit or retry.")
             self.status.config(text=message, foreground=ACCENT_HOT)
-        self._refresh_queue_display()
+        self._refresh_queue_display(select=0 if self.goal_queue else None)
         self._draw_overlay(self.bridge.robot_pose)
 
     def _set_navigation_help(self, text):
