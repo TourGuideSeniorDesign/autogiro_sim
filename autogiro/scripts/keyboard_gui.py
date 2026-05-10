@@ -121,7 +121,11 @@ class App:
         self.map_info = None  # (res, origin_x, origin_y, width_px, height_px)
         self.scale = 1.0  # canvas_px / map_px
         self.offset = (0, 0)  # (dx, dy) canvas pixel offset where map image starts
-        self.goal_world = None  # (x, y, yaw)
+        self.goal_world = None  # pending/preview goal: (x, y, yaw)
+        self.goal_queue = []  # queued goals: [(x, y, yaw), ...]
+        self.active_goal = None  # goal currently being driven to
+        self.queue_running = False
+        self.goal_reached_radius = 0.35
         self._drag_start_canvas = None
         self.nav2_launched = False
 
@@ -187,22 +191,45 @@ class App:
         side.pack_propagate(False)
 
         self._section(side, "Navigation")
-        self.goal_label = ttk.Label(side, text="No goal placed.\nClick and drag to set pose.",
+        self.goal_label = ttk.Label(side, text="No goals queued.\nClick and drag on the map to add one.",
                                     style="Muted.TLabel", justify="left")
         self.goal_label.pack(fill="x", padx=16, pady=(0, 8))
 
         btns = ttk.Frame(side, style="Panel.TFrame")
         btns.pack(fill="x", padx=16, pady=(0, 12))
-        self.nav_btn = ttk.Button(btns, text="Navigate to Goal", style="Accent.TButton",
-                                  command=self._send_goal, state="disabled")
+        self.nav_btn = ttk.Button(btns, text="Start Queue", style="Accent.TButton",
+                                  command=self._toggle_queue, state="disabled")
         self.nav_btn.pack(fill="x")
-        ttk.Button(btns, text="Clear Goal", style="Ghost.TButton",
+        ttk.Button(btns, text="Clear Pending Goal", style="Ghost.TButton",
                    command=self._clear_goal).pack(fill="x", pady=(6, 0))
 
         self._section(side, "Nav2")
         self.nav2_btn = ttk.Button(side, text="Start Nav2 Stack", style="Accent.TButton",
                                    command=self._launch_nav2)
         self.nav2_btn.pack(fill="x", padx=16, pady=(0, 12))
+
+        self._section(side, "Goal Queue")
+        queue_frame = ttk.Frame(side, style="Panel.TFrame")
+        queue_frame.pack(fill="x", padx=16, pady=(0, 12))
+        self.queue_list = tk.Listbox(queue_frame, height=7, activestyle="none",
+                                     bg=PANEL_HI, fg=FG, selectbackground=ACCENT,
+                                     selectforeground="#0b1320", highlightthickness=0,
+                                     borderwidth=0, exportselection=False)
+        self.queue_list.pack(fill="x")
+        self.queue_list.bind("<<ListboxSelect>>", self._on_queue_select)
+
+        queue_btns = ttk.Frame(queue_frame, style="Panel.TFrame")
+        queue_btns.pack(fill="x", pady=(6, 0))
+        ttk.Button(queue_btns, text="↑", style="Ghost.TButton",
+                   command=self._move_selected_goal_up).grid(row=0, column=0, sticky="ew", padx=(0, 3))
+        ttk.Button(queue_btns, text="↓", style="Ghost.TButton",
+                   command=self._move_selected_goal_down).grid(row=0, column=1, sticky="ew", padx=3)
+        ttk.Button(queue_btns, text="Remove", style="Ghost.TButton",
+                   command=self._remove_selected_goal).grid(row=0, column=2, sticky="ew", padx=3)
+        ttk.Button(queue_btns, text="Clear", style="Ghost.TButton",
+                   command=self._clear_queue).grid(row=0, column=3, sticky="ew", padx=(3, 0))
+        for col in range(4):
+            queue_btns.columnconfigure(col, weight=1)
 
         self._section(side, "Keyboard (teleop window)")
         legend = ttk.Frame(side, style="Panel.TFrame")
@@ -239,6 +266,7 @@ class App:
                                     f"@ {msg.info.resolution:.3f} m/px")
             self._redraw()
         self._draw_overlay(pose)
+        self._maybe_advance_queue(pose)
         self.root.after(100, self._tick)
 
     def _redraw(self):
@@ -279,18 +307,28 @@ class App:
                                        right[0], right[1],
                                        fill=ACCENT, outline="#0b1320", width=1,
                                        tags="overlay")
+        for idx, (gx, gy, gyaw) in enumerate(self.goal_queue, start=1):
+            self._draw_goal_marker(gx, gy, gyaw, ACCENT_HOT, str(idx))
+        if self.active_goal is not None:
+            gx, gy, gyaw = self.active_goal
+            self._draw_goal_marker(gx, gy, gyaw, OK, "▶")
         if self.goal_world is not None:
             gx, gy, gyaw = self.goal_world
-            cx, cy = self._world_to_canvas(gx, gy)
-            r = 9
-            self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
-                                    outline=ACCENT_HOT, width=2, tags="overlay")
-            arrow_len = 28
-            ax = cx + math.cos(gyaw) * arrow_len
-            ay = cy - math.sin(gyaw) * arrow_len
-            self.canvas.create_line(cx, cy, ax, ay,
-                                    fill=ACCENT_HOT, width=2, arrow="last",
-                                    arrowshape=(10, 12, 4), tags="overlay")
+            self._draw_goal_marker(gx, gy, gyaw, ACCENT_HOT, "+")
+
+    def _draw_goal_marker(self, gx, gy, gyaw, color, label):
+        cx, cy = self._world_to_canvas(gx, gy)
+        r = 9
+        self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
+                                outline=color, width=2, tags="overlay")
+        self.canvas.create_text(cx, cy, text=label, fill=color,
+                                font=("TkDefaultFont", 9, "bold"), tags="overlay")
+        arrow_len = 28
+        ax = cx + math.cos(gyaw) * arrow_len
+        ay = cy - math.sin(gyaw) * arrow_len
+        self.canvas.create_line(cx, cy, ax, ay,
+                                fill=color, width=2, arrow="last",
+                                arrowshape=(10, 12, 4), tags="overlay")
 
     # ---------- coordinate transforms ----------
 
@@ -324,8 +362,7 @@ class App:
         wx, wy = self._canvas_to_world(event.x, event.y)
         self._drag_start_canvas = (event.x, event.y)
         self.goal_world = (wx, wy, 0.0)
-        self.goal_label.config(text=f"Goal: ({wx:.2f}, {wy:.2f})\nDrag to set heading …")
-        self.nav_btn.config(state="disabled")
+        self.goal_label.config(text=f"New goal: ({wx:.2f}, {wy:.2f})\nDrag to set heading …")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _on_drag(self, event):
@@ -354,27 +391,119 @@ class App:
             yaw = math.atan2(gy - pose[1], gx - pose[0]) if pose else 0.0
             self.goal_world = (gx, gy, yaw)
         self._drag_start_canvas = None
-        deg = math.degrees(self.goal_world[2])
+        self._add_goal_to_queue(self.goal_world)
+        self.goal_world = None
+        self._draw_overlay(self.bridge.robot_pose)
+
+    def _add_goal_to_queue(self, goal):
+        self.goal_queue.append(goal)
+        self._refresh_queue_display(select=len(self.goal_queue) - 1)
+        gx, gy, yaw = goal
         self.goal_label.config(
-            text=f"Goal: ({self.goal_world[0]:.2f}, {self.goal_world[1]:.2f})\n"
-                 f"Heading: {deg:.0f}°")
-        self.nav_btn.config(state="normal")
+            text=f"Queued goal #{len(self.goal_queue)}: ({gx:.2f}, {gy:.2f})\n"
+                 f"Heading: {math.degrees(yaw):.0f}°")
+        self.status.config(text=f"Added goal #{len(self.goal_queue)} to queue.", foreground=OK)
+
+    def _refresh_queue_display(self, select=None):
+        self.queue_list.delete(0, tk.END)
+        for idx, (gx, gy, yaw) in enumerate(self.goal_queue, start=1):
+            self.queue_list.insert(tk.END, f"{idx}.  x={gx:.2f}, y={gy:.2f}, yaw={math.degrees(yaw):.0f}°")
+        if select is not None and self.goal_queue:
+            select = max(0, min(select, len(self.goal_queue) - 1))
+            self.queue_list.selection_set(select)
+            self.queue_list.activate(select)
+        if self.queue_running:
+            self.nav_btn.config(state="normal", text="Stop Queue")
+        else:
+            self.nav_btn.config(state="normal" if self.goal_queue else "disabled", text="Start Queue")
+
+    def _selected_queue_index(self):
+        selection = self.queue_list.curselection()
+        return selection[0] if selection else None
+
+    def _on_queue_select(self, _event=None):
+        idx = self._selected_queue_index()
+        if idx is None:
+            return
+        gx, gy, yaw = self.goal_queue[idx]
+        self.goal_label.config(
+            text=f"Selected goal #{idx + 1}: ({gx:.2f}, {gy:.2f})\n"
+                 f"Heading: {math.degrees(yaw):.0f}°")
+
+    def _move_selected_goal_up(self):
+        idx = self._selected_queue_index()
+        if idx is None or idx <= 0:
+            return
+        self.goal_queue[idx - 1], self.goal_queue[idx] = self.goal_queue[idx], self.goal_queue[idx - 1]
+        self._refresh_queue_display(select=idx - 1)
+        self._draw_overlay(self.bridge.robot_pose)
+
+    def _move_selected_goal_down(self):
+        idx = self._selected_queue_index()
+        if idx is None or idx >= len(self.goal_queue) - 1:
+            return
+        self.goal_queue[idx + 1], self.goal_queue[idx] = self.goal_queue[idx], self.goal_queue[idx + 1]
+        self._refresh_queue_display(select=idx + 1)
+        self._draw_overlay(self.bridge.robot_pose)
+
+    def _remove_selected_goal(self):
+        idx = self._selected_queue_index()
+        if idx is None:
+            return
+        removed = self.goal_queue.pop(idx)
+        self._refresh_queue_display(select=min(idx, len(self.goal_queue) - 1) if self.goal_queue else None)
+        self.goal_label.config(text=f"Removed queued goal at ({removed[0]:.2f}, {removed[1]:.2f}).")
+        self._draw_overlay(self.bridge.robot_pose)
+
+    def _clear_queue(self):
+        self.goal_queue.clear()
+        self._refresh_queue_display()
+        self.goal_label.config(text="Queue cleared.\nClick and drag on the map to add goals.")
         self._draw_overlay(self.bridge.robot_pose)
 
     def _clear_goal(self):
         self.goal_world = None
         self._drag_start_canvas = None
-        self.goal_label.config(text="No goal placed.\nClick and drag to set pose.")
-        self.nav_btn.config(state="disabled")
+        self.goal_label.config(text="No pending goal.\nClick and drag on the map to add one.")
         self._draw_overlay(self.bridge.robot_pose)
 
-    def _send_goal(self):
-        if self.goal_world is None:
+    def _toggle_queue(self):
+        if self.queue_running:
+            self.queue_running = False
+            self.active_goal = None
+            self._refresh_queue_display()
+            self.status.config(text="Goal queue stopped. Current Nav2 goal may continue.", foreground=MUTED)
+            self._draw_overlay(self.bridge.robot_pose)
             return
-        gx, gy, yaw = self.goal_world
+        if not self.goal_queue:
+            return
+        self.queue_running = True
+        self._refresh_queue_display()
+        self._send_next_goal()
+
+    def _send_next_goal(self):
+        if not self.goal_queue:
+            self.queue_running = False
+            self.active_goal = None
+            self._refresh_queue_display()
+            self.status.config(text="Goal queue complete.", foreground=OK)
+            self._draw_overlay(self.bridge.robot_pose)
+            return
+        self.active_goal = self.goal_queue.pop(0)
+        self._refresh_queue_display(select=0 if self.goal_queue else None)
+        gx, gy, yaw = self.active_goal
         self.bridge.publish_goal(gx, gy, yaw)
         self.status.config(text=f"Goal sent → ({gx:.2f}, {gy:.2f}) @ {math.degrees(yaw):.0f}°",
                            foreground=OK)
+        self.goal_label.config(text=f"Driving to ({gx:.2f}, {gy:.2f})\n{len(self.goal_queue)} queued after this.")
+        self._draw_overlay(self.bridge.robot_pose)
+
+    def _maybe_advance_queue(self, pose):
+        if not self.queue_running or self.active_goal is None or pose is None:
+            return
+        gx, gy, _yaw = self.active_goal
+        if math.hypot(pose[0] - gx, pose[1] - gy) <= self.goal_reached_radius:
+            self._send_next_goal()
 
     def _launch_nav2(self):
         pkg_share_config = os.environ.get("AUTOGIRO_CONFIG_DIR", "")
